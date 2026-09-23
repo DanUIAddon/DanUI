@@ -1721,7 +1721,7 @@ function DUI_ToggleConfig(targetFrame, openFunc)
 end
 
 
-SLASH_DAN1, SLASH_DUIRC1 = "/dan", "/duirc"
+SLASH_DAN1, SLASH_DAN2, SLASH_DUIRC1 = "/dan", "/dui", "/duirc"
 SlashCmdList["DAN"] = function(msg)
     -- Config panels remember where you drag them; this puts them all back beside
     -- the main window if one ends up somewhere awkward.
