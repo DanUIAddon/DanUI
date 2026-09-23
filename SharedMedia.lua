@@ -61,7 +61,7 @@ local sounds = {
     { "|cFFFFFF00UB_BoomcatYell|r",     "UB_BoomcatYell.ogg" },
 
     -- TTS callouts
-    { "|cFF9CAF88UB_lifebloomtts|r",    "lifebloomtts.ogg" },
+    { "|cFF9CAF88lifebloomtts|r",    "lifebloomtts.ogg" },
     { "|cFF9CAF88convoketts|r",         "convoketts.ogg" },
     { "|cFF9CAF88tranquilitytts|r",     "tranquilitytts.ogg" },
     { "|cFF9CAF88incarntts|r",          "incarntts.ogg" },
@@ -105,6 +105,8 @@ local sounds = {
     { "|cFF9CAF88soakguillotinetts|r",  "soakguillotinetts.mp3" },
     { "|cFF9CAF88safetts|r",            "safetts.mp3" },
     { "|cFF9CAF883ghoststts|r",         "3ghoststts.mp3" },
+    { "|cFF9CAF88lookatghosttts|r",     "lookatghosttts.mp3" },
+    { "|cFF9CAF88mindcontroltts|r",     "mindcontroltts.mp3" },
 }
 
 for _, entry in ipairs(sounds) do
