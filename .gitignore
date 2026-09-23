@@ -1,0 +1,23 @@
+# Personal tooling
+.claude/
+.vscode/
+DanUIWorkspace.code-workspace
+hd_test.txt
+
+# Ported from All Rights Reserved addons - loaded by the local install only, never
+# published. Remove a line here once that author has given permission in writing.
+Mover.lua
+MoverFrames.lua
+MoverConfig.lua
+NoAutoclose.lua
+Timeline.lua
+
+# Not ours to publish: a commercial font (Typodermic, no embedding without an
+# Application License) and a movie clip. The local install keeps them; the
+# packager strips their registrations (--@do-not-package@).
+Fonts/Expressway.TTF
+Sounds/UB_VADERNO.ogg
+
+# Dev notes and tooling - kept on this machine only.
+CLAUDE.md
+Tools/

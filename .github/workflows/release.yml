@@ -1,0 +1,21 @@
+# Pushing a tag like v1.0.0 builds DanUI-v1.0.0.zip and attaches it, plus the
+# release.json that WowUp / CurseBreaker read, to a GitHub Release.
+name: Package and release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: BigWigsMods/packager@v2
+        env:
+          GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}

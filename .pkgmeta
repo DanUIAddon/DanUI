@@ -1,0 +1,14 @@
+# Read by the BigWigs packager (.github/workflows/release.yml) when a v* tag is pushed.
+package-as: DanUI
+
+# Left out of the release zip. The All Rights Reserved modules are not listed here
+# because .gitignore already keeps them out of the repo, and the packager builds
+# from the repo; their TOC lines are stripped by #@do-not-package@ in DanUI.toc.
+ignore:
+  - .claude
+  - .vscode
+  - .github
+  - Tools
+  - CLAUDE.md
+  - DanUIWorkspace.code-workspace
+  - icon-512.png

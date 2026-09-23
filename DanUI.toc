@@ -1,0 +1,152 @@
+## Interface: 120100
+## Title: Dan UI
+## Notes: A collection of random quality of life features.
+## Version: @project-version@
+## X-License: GPL-3.0-or-later
+## SavedVariables: DanUIDB
+## SavedVariablesPerCharacter: DanUICharDB
+## OptionalDeps: BigWigs, PremadeRegions, RaiderIO
+
+# X-Flavor is read by LFGFilter/Init.lua (vendored Premade Groups Filter) to
+# pick its client-specific code paths.
+## X-Flavor: Retail
+
+# 1. Embedded Libraries
+Libs\LibCustomGlow-1.0\LibStub\LibStub.lua
+Libs\LibCustomGlow-1.0\LibCustomGlow-1.0.xml
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibSharedMedia-3.0\LibSharedMedia-3.0.lua
+
+# 1b. Soundpack (merged in from the standalone SharedMedia_UB addon).
+# Must load before DanUI.lua so the sounds exist by the time modules build their
+# LSM dropdowns.
+SharedMedia.lua
+
+# 2. Core Framework (Must be before any modules)
+DanUI.lua
+
+# 3. Logic/Utility Modules (Used by UI modules)
+GroupSplit.lua
+BattleRes.lua
+
+# 4. Feature Modules
+ReadyCheck.lua
+CastbarModule.lua
+CombatTime.lua
+CombatAlerts.lua
+LowHealthReminder.lua
+# Wrapped in do-not-package: NoAutoclose.lua, Timeline.lua and Mover*.lua are
+# ported from All Rights Reserved addons and may not be redistributed without
+# their authors' permission (see CLAUDE.md, Licensing). The packager strips these
+# lines from the released TOC; .gitignore keeps the files out of the public repo.
+# The local install still loads them. Everything that calls into them is nil-guarded
+# and the main window hides a module row whose panel does not exist.
+#@do-not-package@
+NoAutoclose.lua
+#@end-do-not-package@
+Groups.lua
+AssistModule.lua
+RaidToolsModule.lua
+RaidAutomation.lua
+Automation.lua
+#@do-not-package@
+Timeline.lua
+#@end-do-not-package@
+BreakTimer.lua
+ReadyCheckPullTimer.lua
+GuildBankSort.lua
+WarbankGold.lua
+GuildBankRestock.lua
+BagItemLevel.lua
+
+# AutoPayout (ported from Oppzippy's Auto Payout, reskinned for DUI)
+AutoPayoutLogic.lua
+AutoPayout.lua
+
+# Frame Mover (ported from EnhanceQoLMover, reskinned for DUI)
+#@do-not-package@
+Mover.lua
+MoverFrames.lua
+MoverConfig.lua
+#@end-do-not-package@
+
+
+# LFG Filter (vendored Premade Groups Filter by Bernhard Saumweber, GPL-2.0-or-later).
+# Order below matches the upstream PremadeGroupsFilter.toc, with three DanUI files:
+#   LFGFilterDB.lua      must load FIRST - creates the saved-variable tables that
+#                        the rewritten PGF source reads (DanUIDB.LFGFilter.*)
+#   LFGFilterSkin.lua    restyles the group-finder dialog to the DUI theme
+#   LFGFilterModule.lua  the DanUI module wrapper - must load LAST
+# Never loaded: the Mists-only files (DanUI is retail-only) and Settings/Settings.xml
+# (the Blizzard options panel was removed; the config lives in the DUI panel).
+LFGFilter\LFGFilterDB.lua
+LFGFilter\Init.lua
+LFGFilter\Compat.lua
+LFGFilter\Localization\enUS.lua
+LFGFilter\Localization\frFR.lua
+LFGFilter\Localization\deDE.lua
+LFGFilter\Localization\koKR.lua
+LFGFilter\Localization\zhCN.lua
+LFGFilter\Localization\zhTW.lua
+LFGFilter\Localization\ruRU.lua
+LFGFilter\Localization\esES.lua
+LFGFilter\Localization\itIT.lua
+LFGFilter\Modules\Logger.lua
+LFGFilter\UI\StaticPopup.xml
+LFGFilter\UI\StaticPopup.lua
+LFGFilter\Modules\Util.lua
+LFGFilter\Modules\Activity.lua
+LFGFilter\Modules\ActivityKeywords.lua
+LFGFilter\Modules\AdvancedFilter.lua
+LFGFilter\Modules\Specializations.lua
+LFGFilter\Modules\MemberInfo.lua
+LFGFilter\Modules\RemainingSlots.lua
+LFGFilter\Modules\ApplicationStatus.lua
+LFGFilter\Modules\Lockout.lua
+LFGFilter\Modules\Expression.lua
+LFGFilter\Modules\PlayerInfo.lua
+LFGFilter\Modules\Macro.lua
+LFGFilter\Modules\GroupTooltip.lua
+LFGFilter\Modules\RoleIndicators.lua
+LFGFilter\Modules\RatingInfo.lua
+LFGFilter\Modules\GroupAge.lua
+LFGFilter\Modules\PersistSignUpNote.lua
+LFGFilter\Modules\OneClickSignUp.lua
+LFGFilter\Modules\SignUpOnEnter.lua
+LFGFilter\Modules\CompactListEntries.lua
+LFGFilter\Main.lua
+LFGFilter\Plugins\PremadeRegions.lua
+LFGFilter\Plugins\RaiderIO.lua
+LFGFilter\Settings\Settings.lua
+LFGFilter\UI\TextButtonMixin.lua
+LFGFilter\UI\Common.lua
+LFGFilter\UI\PopupMenu.xml
+LFGFilter\UI\PopupMenu.lua
+LFGFilter\UI\Help.lua
+LFGFilter\UI\Templates.xml
+LFGFilter\UI\Dialog.xml
+LFGFilter\UI\Dialog.lua
+LFGFilter\UI\DungeonPanel.xml
+LFGFilter\UI\DungeonPanel.lua
+LFGFilter\UI\DelvePanel.xml
+LFGFilter\UI\DelvePanel.lua
+LFGFilter\UI\RolePanel.xml
+LFGFilter\UI\RolePanel.lua
+LFGFilter\UI\ArenaPanel.xml
+LFGFilter\UI\ArenaPanel.lua
+LFGFilter\UI\RBGPanel.xml
+LFGFilter\UI\RBGPanel.lua
+LFGFilter\UI\RaidPanel.xml
+LFGFilter\UI\RaidPanel.lua
+LFGFilter\UI\MiniPanel.xml
+LFGFilter\UI\MiniPanel.lua
+LFGFilter\UI\UsePGFButton.lua
+LFGFilter\LFGFilterSkin.lua
+LFGFilter\LFGFilterModule.lua
+
+# 5. Global UI Components (Last to ensure all globals are defined)
+# Theme.lua hangs its button off the main window and reaches into the color
+# registries in DanUI.lua, so it loads after both.
+Theme.lua
+MinimapButton.lua
+FloatingButtons.lua
