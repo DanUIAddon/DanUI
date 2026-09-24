@@ -69,6 +69,12 @@ end
 
 function UpdateCharges()
     db = DanUIDB.RaidTools
+    -- The post-combat C_Timer and the recharge OnUpdate can both land here after the
+    -- tracker was switched off, and everything below ends in frame:Show().
+    if not frame.brEnabled and not frame.isTesting then
+        frame:Hide()
+        return
+    end
     local chargeInfo = C_Spell.GetSpellCharges(20484)
     
     -- If no charges are available (not in a raid/M+ encounter), hide the frame
@@ -138,6 +144,7 @@ function ToggleBRTracker(enabled)
         frame:Show()
     elseif enabled then
         frame.isTesting = false
+        frame.brEnabled = true
         -- Charge tracking only needs SPELL_UPDATE_CHARGES. SPELL_UPDATE_COOLDOWN
         -- fires on nearly every GCD in combat and would rebuild the frame each time.
         frame:RegisterEvent("SPELL_UPDATE_CHARGES")
@@ -150,6 +157,7 @@ function ToggleBRTracker(enabled)
         UpdateCharges()
     else
         frame.isTesting = false
+        frame.brEnabled = false
         frame:UnregisterAllEvents()
         frame:SetScript("OnUpdate", nil)
         frame:Hide()

@@ -54,6 +54,7 @@ end
 PGF.clickToCancelFrames = {}
 
 hooksecurefunc("LFGListSearchEntry_OnEnter", function (self)
+    if not PGF.MasterEnabled() then return end -- DUI: master toggle
     if not DanUIDB.LFGFilter.settings.cancelOldestApp then return end
 
     local clickToCancelFrame = PGF.clickToCancelFrames[self]
@@ -90,6 +91,7 @@ hooksecurefunc("LFGListSearchEntry_OnLeave", function (self)
 end)
 
 hooksecurefunc("LFGListSearchEntry_OnClick", function (self, button)
+    if not PGF.MasterEnabled() then return end -- DUI: master toggle
     local panel = LFGListFrame.SearchPanel
 
     if DanUIDB.LFGFilter.settings.cancelOldestApp and button ~= "RightButton" then
@@ -116,6 +118,7 @@ end)
 
 -- need to hook the show event directly as we might have overwritten LFGListApplicationDialog_Show
 LFGListApplicationDialog:HookScript("OnShow", function(self)
+    if not PGF.MasterEnabled() then return end -- DUI: master toggle
     if not DanUIDB.LFGFilter.settings.skipSignUpDialog then return end
 
     if self.SignUpButton:IsEnabled() and not IsShiftKeyDown() then

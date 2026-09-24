@@ -147,6 +147,12 @@ ForcePromoteBtn:SetSize(160, 25); ForcePromoteBtn:SetPoint("BOTTOM", config, "BO
 ForcePromoteBtn:SetText("Force Promote Check")
 StyleAsTealTab(ForcePromoteBtn)
 ForcePromoteBtn:SetScript("OnClick", function()
+    -- DUI_ProcessRosterPromotions bails silently when the row is unticked, so say
+    -- why here rather than print "initiated" over a check that never ran.
+    if db and db.enabled == false then
+        print("|cFF00FF00[DUI]|r Auto-Assist List is switched off in the module list.")
+        return
+    end
     if DUI_ProcessRosterPromotions then
         DUI_ProcessRosterPromotions()
         print("|cFF00FF00[DUI]|r Manual promotion check initiated.")

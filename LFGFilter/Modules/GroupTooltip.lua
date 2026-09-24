@@ -104,6 +104,7 @@ function PGF.AddClassCountListing(tooltip, resultID, searchResultInfo)
 end
 
 function PGF.OnLFGListUtilSetSearchEntryTooltip(tooltip, resultID, autoAcceptOption)
+    if not PGF.MasterEnabled() then return end -- DUI: master toggle
     if not DanUIDB.LFGFilter.settings.classNamesInTooltip then return end
 
     local searchResultInfo = PGF.GetSearchResultInfo(resultID)

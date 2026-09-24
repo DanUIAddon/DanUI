@@ -1877,8 +1877,6 @@ EventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
         if not DanUIDB.AssistList then DanUIDB.AssistList = {} end
         if DanUIDB.AutoInviteEnabled == nil then DanUIDB.AutoInviteEnabled = false end
         DanUIDB.AutoInviteKeywords = DanUIDB.AutoInviteKeywords or "inv invite"
-        if DanUIDB.BattleResEnabled == nil then DanUIDB.BattleResEnabled = true end
-        if DanUIDB.BattleResLocked == nil then DanUIDB.BattleResLocked = false end
          -- Split Roster Defaults
         if DanUIDB.SplitParts == nil then DanUIDB.SplitParts = "auto" end
         if DanUIDB.SplitLayout == nil then DanUIDB.SplitLayout = "block" end
@@ -1963,7 +1961,12 @@ EventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
         -- migrated before the defaults are backfilled onto it.
         if DUI_InitRaidAutomation then DUI_InitRaidAutomation() end
 
-        if ToggleBRTracker then ToggleBRTracker(DanUIDB.BattleResEnabled) end
+        -- The rail's tick lives in RaidTools.battleResEnabled. This used to read the
+        -- pre-RaidTools top-level DanUIDB.BattleResEnabled, which nothing clears and was
+        -- defaulted true, so the tracker came back on at every reload.
+        if ToggleBRTracker then
+            ToggleBRTracker(DanUIDB.RaidTools and DanUIDB.RaidTools.battleResEnabled)
+        end
         if DUI_InitAssistModule then DUI_InitAssistModule() end
         if DUI_InitGuildBankSort then DUI_InitGuildBankSort() end
         if DUI_InitAutoPayout then DUI_InitAutoPayout() end
@@ -2067,10 +2070,10 @@ local HIT_H, MAX_HITS = 17, 4
 -- field is spelled out rather than assumed.
 local DUI_MODULE_GROUPS = {
     { name = "RAID", modules = {
-        { text = "Invites",            frame = "DUI_InvitesConfig",           open = "DUI_OpenInvitesConfig",             dbKey = "RaidTools", field = "autoInviteEnabled" },
-        { text = "Raid Automation",    frame = "DUI_RaidAutomationConfig",    open = "DUI_OpenRaidAutomationConfig",      dbKey = "RaidAutomation" },
+        { text = "Invites",            frame = "DUI_InvitesConfig",           open = "DUI_OpenInvitesConfig",             dbKey = "RaidTools", field = "autoInviteEnabled", apply = "DUI_InvitesApplyEnabled" },
+        { text = "Raid Automation",    frame = "DUI_RaidAutomationConfig",    open = "DUI_OpenRaidAutomationConfig",      dbKey = "RaidAutomation",      apply = "DUI_RaidAutomationApplyEnabled" },
         { text = "Raid Arranger",      frame = "DUI_GroupsPopout",                                                        dbKey = "RaidArranger" },
-        { text = "Auto-Assist List",   frame = "DUI_AssistConfig",            open = "DUI_OpenAssistConfig",              dbKey = "AssistModule" },
+        { text = "Auto-Assist List",   frame = "DUI_AssistConfig",            open = "DUI_OpenAssistConfig",              dbKey = "AssistModule",        apply = "DUI_AssistApplyEnabled" },
         { text = "RC & Pull",          frame = "DUI_RCPTConfig",              open = "DUI_OpenReadyCheckPullTimerConfig", dbKey = "ReadyCheckPullTimer", apply = "DUI_ReadyCheckPullTimerApplyEnabled" },
         { text = "Break Timer",        frame = "DUI_BreakTimerConfig",        open = "DUI_OpenBreakTimerConfig",          dbKey = "BreakTimer",          apply = "DUI_BreakTimerApplyEnabled" },
         { text = "BigWigs & Timeline", frame = "DUI_TimelineConfig",          open = "DUI_OpenTimelineConfig",            dbKey = "Timeline",            apply = "DUI_TimelineApplyEnabled" },

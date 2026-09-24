@@ -18,14 +18,16 @@
 -- 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 -------------------------------------------------------------------------------
 
+local PGF = select(2, ...) -- DUI: for the master toggle below
+
 if LFGListApplicationDialogDescription and LFGListApplicationDialogDescription.EditBox then
     LFGListApplicationDialogDescription.EditBox:HookScript("OnShow", function()
-        if DanUIDB.LFGFilter.settings.signupOnEnter then
+        if PGF.MasterEnabled() and DanUIDB.LFGFilter.settings.signupOnEnter then -- DUI: master toggle
             LFGListApplicationDialogDescription.EditBox:SetFocus()
         end
     end)
     LFGListApplicationDialogDescription.EditBox:HookScript("OnEnterPressed", function()
-        if DanUIDB.LFGFilter.settings.signupOnEnter then
+        if PGF.MasterEnabled() and DanUIDB.LFGFilter.settings.signupOnEnter then -- DUI: master toggle
             LFGListApplicationDialog.SignUpButton:Click()
         end
     end)

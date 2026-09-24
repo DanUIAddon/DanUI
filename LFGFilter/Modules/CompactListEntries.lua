@@ -35,7 +35,8 @@ local function desiredHeight()
 
     -- 12.0.0 added a third line with the playstyle and increased the entry height from 36 to 54
     -- (see LFGListSearchEntryTemplate in LFGList.xml)
-    return DanUIDB.LFGFilter.settings.compactListEntries and 36 or templateHeight
+    -- DUI: master toggle - off restores Blizzard's row height
+    return PGF.MasterEnabled() and DanUIDB.LFGFilter.settings.compactListEntries and 36 or templateHeight
 end
 
 function PGF.CompactListEntries_UpdateListScrollBox()
@@ -49,13 +50,14 @@ function PGF.CompactListEntries_UpdateListScrollBox()
 end
 
 function PGF.CompactListEntries_UpdateListEntry(self)
-    self.Playstyle:SetShown(not DanUIDB.LFGFilter.settings.compactListEntries)
+    self.Playstyle:SetShown(not (PGF.MasterEnabled() and DanUIDB.LFGFilter.settings.compactListEntries)) -- DUI: master toggle
     self:SetHeight(desiredHeight())
 end
 
 function PGF.InitCompactListEntries()
     if not DanUIDB.LFGFilter.settings.compactListEntries then return end
 
+    PGF.compactListHooked = true -- DUI: lets the master toggle re-apply the row height
     hooksecurefunc("LFGListSearchEntry_Update", PGF.CompactListEntries_UpdateListEntry)
     PVEFrame:HookScript("OnShow", function () PGF.CompactListEntries_UpdateListScrollBox() end)
 end

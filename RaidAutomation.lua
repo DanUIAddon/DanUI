@@ -227,16 +227,37 @@ function DUI_InitRaidAutomationDB()
     return db
 end
 
+local eventFrame = CreateFrame("Frame")
+eventFrame:SetScript("OnEvent", ScheduleUpdate)
+
+-- Registered only while the row is ticked, so an off module is not woken by every
+-- roster change just to reach TryApplyDifficulty's own flag check.
+local function SetEventsRegistered(on)
+    if on then
+        eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+        eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
+        eventFrame:RegisterEvent("PARTY_LEADER_CHANGED")
+        -- Difficulty can be switched from inside the instance too.
+        eventFrame:RegisterEvent("PLAYER_DIFFICULTY_CHANGED")
+    else
+        eventFrame:UnregisterAllEvents()
+        if applyTimer then applyTimer:Cancel(); applyTimer = nil end
+    end
+end
+
+-- Apply hook for the main window's rail. Switching on re-arms the latch and runs a
+-- pass, so ticking it while already leading tonight's raid takes effect now.
+function DUI_RaidAutomationApplyEnabled(enabled)
+    SetEventsRegistered(enabled)
+    if enabled then
+        applied = false
+        ScheduleUpdate()
+    end
+end
+
 function DUI_InitRaidAutomation()
     DUI_InitRaidAutomationDB()
-
-    local f = CreateFrame("Frame")
-    f:RegisterEvent("PLAYER_ENTERING_WORLD")
-    f:RegisterEvent("GROUP_ROSTER_UPDATE")
-    f:RegisterEvent("PARTY_LEADER_CHANGED")
-    -- Difficulty can be switched from inside the instance too.
-    f:RegisterEvent("PLAYER_DIFFICULTY_CHANGED")
-    f:SetScript("OnEvent", ScheduleUpdate)
+    SetEventsRegistered(db.enabled)
 
     -- Covers a /reload taken while already leading a raid or standing in one.
     C_Timer.After(1.0, TryApplyDifficulty)

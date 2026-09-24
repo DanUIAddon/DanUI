@@ -486,6 +486,19 @@ function PGF.ColorGroupTexts(self, searchResultInfo)
 end
 
 function PGF.OnLFGListSearchEntryUpdate(self)
+    -- DUI: master toggle. Blizzard's own update has just repainted the entry's
+    -- text, so only PGF's overlay frames need clearing - the same reset each
+    -- decorator does when its own setting is off.
+    if not PGF.MasterEnabled() then
+        for _, f in ipairs(PGF.roleIndicators[self] or {}) do f:Hide() end
+        local ratingFrame = PGF.ratingInfoFrames[self]
+        if ratingFrame and ratingFrame:IsShown() then
+            ratingFrame:Hide()
+            self.Name:SetWidth(176)
+            self.ActivityName:SetWidth(176)
+        end
+        return
+    end
     local searchResultInfo = PGF.GetSearchResultInfo(self.resultID)
     if not searchResultInfo then return end
 

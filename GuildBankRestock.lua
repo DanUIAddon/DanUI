@@ -400,6 +400,9 @@ end
 
 local function PlanAndRun()
     local reason = Plan()
+    -- Plan yields across server round trips; anything that called Finish in the
+    -- meantime (switched off, bank closed) has already ended this run.
+    if not running then return end
     if reason or #queue == 0 then
         Finish(reason or "nothing to withdraw")
     else
@@ -775,6 +778,9 @@ end
 -- Called by the main window's enable checkbox, so the panel's own tick agrees
 -- with a switch flipped from out there.
 function DUI_GuildBankRestockApplyEnabled()
+    -- A withdraw in flight is a ticker that keeps pulling items; switching the
+    -- module off has to stop it, not just the next scheduled run.
+    if not db.enabled and running then Finish("stopped, the module was switched off") end
     RefreshStatus()
 end
 

@@ -101,7 +101,18 @@ local function UpdateAutoInviteKeywords()
     end
 end
 
+-- The Auto-Assist List row owns every promotion this file makes, the guild-rank
+-- half included: it is the only switch in the main window that says "promote
+-- people", and the rank rule used to run with nothing able to turn it off.
+-- A missing table reads as on: it is the module's default, and this can run
+-- before DUI_InitAssistModule has created the table on a fresh install.
+local function AssistEnabled()
+    local assistDB = DanUIDB and DanUIDB.AssistModule
+    return not assistDB or assistDB.enabled ~= false
+end
+
 function DUI_ProcessRosterPromotions()
+    if not AssistEnabled() then return end
     if not IsInRaid() or not UnitIsGroupLeader("player") then return end
     local numMembers = GetNumGroupMembers()
     local myGuildName = GetGuildInfo("player")
@@ -123,12 +134,10 @@ function DUI_ProcessRosterPromotions()
 
             local unitGuildName, _, gr = GetGuildInfo(unit)
             local promotedByRank = (myGuildName and unitGuildName and myGuildName == unitGuildName and gr and gr <= MIN_RANK_INDEX)
-            -- The Auto-Assist List module owns the manual half of this. Its
-            -- `enabled` flag existed in the defaults but nothing ever read it,
-            -- so the launcher's checkbox for it did nothing until now.
+            -- AssistEnabled() above has already gated the whole pass.
             local assistDB = DanUIDB.AssistModule
-            local promotedByManual = (assistDB and assistDB.enabled
-                and (assistDB.assistList[fn] or assistDB.assistList[shortName]))
+            local promotedByManual = assistDB and assistDB.assistList
+                and (assistDB.assistList[fn] or assistDB.assistList[shortName])
 
             if promotedByRank or promotedByManual then
                 PromoteToAssistant(fn)
@@ -179,6 +188,12 @@ function DUI_OpenInvitesConfig()
               note = "Sends one invite per member -- there is no confirmation." })
         L:Gap(33)
         InviteBtn:SetScript("OnClick", function()
+            -- The row's tick gates the on-demand button too, the same rule the
+            -- Guild Bank Sorter and Raid Arranger follow.
+            if not db.autoInviteEnabled then
+                print("|cFF00FF00[DUI]|r Invites is switched off in the module list.")
+                return
+            end
             if not IsInGuild() then return end
             RequestRaidConvert()
             for i = 1, GetNumGuildMembers() do
@@ -346,17 +361,43 @@ function DUI_OpenFloatingButtonsConfig()
 end
 
 
+-- One frame, two owners: the whisper belongs to the Invites row, the roster
+-- events to the Auto-Assist List row. Each is registered only while its row is
+-- ticked, so a module switched off is not woken by every whisper or roster change.
+local eventFrame = CreateFrame("Frame")
+
+local function SyncRaidToolsEvents()
+    if not db then return end
+    if db.autoInviteEnabled then
+        eventFrame:RegisterEvent("CHAT_MSG_WHISPER")
+    else
+        eventFrame:UnregisterEvent("CHAT_MSG_WHISPER")
+        -- Invites parked behind a raid conversion would otherwise still go out.
+        if pendingTimer then pendingTimer:Cancel(); pendingTimer = nil end
+        wipe(pendingInvites)
+        converting, pendingTries = false, 0
+    end
+    if AssistEnabled() then
+        eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
+        eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+    else
+        eventFrame:UnregisterEvent("GROUP_ROSTER_UPDATE")
+        eventFrame:UnregisterEvent("PLAYER_ENTERING_WORLD")
+        if rosterTimer then rosterTimer:Cancel(); rosterTimer = nil end
+    end
+end
+
+-- Apply hooks for the two rows on the main window's rail.
+DUI_InvitesApplyEnabled = SyncRaidToolsEvents
+DUI_AssistApplyEnabled = SyncRaidToolsEvents
+
 function DUI_InitRaidToolsModule()
     if not DanUIDB.RaidTools then DanUIDB.RaidTools = DUI_GetRaidToolsDefaults() end
     db = DanUIDB.RaidTools
 
     UpdateAutoInviteKeywords()
 
-    -- Register events for auto-invite and roster promotions
-    local eventFrame = CreateFrame("Frame")
-    eventFrame:RegisterEvent("CHAT_MSG_WHISPER")
-    eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
-    eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+    SyncRaidToolsEvents()
     eventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
         if event == "CHAT_MSG_WHISPER" then
             if not db.autoInviteEnabled then return end

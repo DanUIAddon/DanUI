@@ -27,11 +27,11 @@
 -- addon-private table, so `PGF` below is the same table those files populate.
 -- None of PGF's keys collide with the ones AutoPayout / GuildBankSort put there.
 --
--- Master toggle scope: the DanUI checkbox turns off result filtering, the filter
--- dialog, and the PGF checkbox on the group finder. The cosmetic extras (class
--- bars, leader crown, rating, group age, tooltips) reset themselves from their own
--- settings, so they keep their individual checkboxes in the config panel below
--- rather than being force-cleared here.
+-- Master toggle scope: off means PGF does nothing at all. The Dialog wrappers below
+-- stop filtering, the dialog and the PGF checkbox; every other hook PGF installs
+-- (entry decorations, tooltips, one-click / skip-dialog / Enter sign-up, compact
+-- rows) asks PGF.MasterEnabled() first, via a `DUI:` guard in the vendored file.
+-- Those used to keep running on their own settings with the master off.
 -------------------------------------------------------------------------------
 
 local _, PGF = ...
@@ -52,6 +52,9 @@ local function MasterEnabled()
     -- the window between file load and ADDON_LOADED.
     return db == nil or db.enabled
 end
+-- For the guards inside the vendored files, which all run from hooks - never at
+-- file scope - so this file loading last is no problem.
+PGF.MasterEnabled = MasterEnabled
 
 -- Filtering and dialog visibility both funnel through these two Dialog methods, so
 -- wrapping them is enough to make the master toggle take effect immediately without
@@ -105,6 +108,13 @@ function DUI_LFGFilterApplyEnabled(enabled)
     -- Re-run the filter so the visible list picks it back up (or drops it).
     if LFGListFrame and LFGListFrame.SearchPanel and LFGListFrame.SearchPanel:IsVisible() then
         PGF.FilterSearchResults()
+    end
+    -- Row height is set on the scroll view, not per entry, so compact rows have to
+    -- be re-applied (or undone) here. Only once the hook exists, i.e. the option
+    -- was on at login; otherwise nothing ever changed the height.
+    if PGF.compactListHooked and PGF.CompactListEntries_UpdateListScrollBox
+            and LFGListFrame and LFGListFrame.SearchPanel then
+        PGF.CompactListEntries_UpdateListScrollBox()
     end
 end
 
