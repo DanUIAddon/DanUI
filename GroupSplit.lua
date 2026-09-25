@@ -33,6 +33,23 @@ local function GetPlayerPrio(name)
     return prio
 end
 
+-- Raid members who are offline, keyed by both the full and the short name, since
+-- the boxes hold whatever was typed or snapshotted. A name that is not in the raid
+-- at all is left out, i.e. treated as present: that is someone typed in ahead of
+-- an invite, and parking them would be wrong.
+local function OfflineLookup()
+    local offline = {}
+    if not IsInRaid() then return offline end
+    for i = 1, GetNumGroupMembers() do
+        local name, _, _, _, _, _, _, online = GetRaidRosterInfo(i)
+        if name and not online then
+            offline[name] = true
+            offline[Ambiguate(name, "short")] = true
+        end
+    end
+    return offline
+end
+
 function DUI_SplitRoster()
     local db = DanUIDB
     local popout = DUI_GroupsPopout
@@ -44,8 +61,51 @@ function DUI_SplitRoster()
     -- "interleave" -> parts take every Nth group in turn      (1,3,5 | 2,4,6)
     local splitLayout = db.SplitLayout or "block"
 
+    local roster = {}
+    -- Offline players take no part in the split: they are parked in the last
+    -- enabled group(s), out of the way, and every count below (auto part count,
+    -- group sizing, caps) is taken over the online players only.
+    local parked = {}
+    local offline = OfflineLookup()
+
+    local function Collect(name)
+        if offline[name] then
+            table.insert(parked, name)
+        else
+            table.insert(roster, {name = name, prio = GetPlayerPrio(name)})
+        end
+    end
+
+    -- 1. Collect names from enabled groups
+    for i = 1, 8 do
+        if GROUPS_OPT[i] then
+            for j = 1, 5 do
+                local idx = (i - 1) * 5 + j
+                local eb = popout.Edits[idx]
+                local name = strtrim(eb:GetText())
+                if name and name ~= "" then
+                    Collect(name)
+                end
+            end
+        end
+    end
+
+    -- Pull from current raid roster if arranger is empty
+    if #roster == 0 and #parked == 0 then
+        if IsInRaid() then
+            for i = 1, GetNumGroupMembers() do
+                local name = GetRaidRosterInfo(i)
+                if name then
+                    Collect(Ambiguate(name, "short"))
+                end
+            end
+        end
+    end
+
+    if #roster == 0 and #parked == 0 then return end
+
     if splitParts == "auto" then
-        local numMembers = GetNumGroupMembers()
+        local numMembers = #roster
         if numMembers > 30 then
             splitParts = 8
         elseif numMembers > 20 then
@@ -55,40 +115,8 @@ function DUI_SplitRoster()
         else
             splitParts = 2
         end
-        print(string.format("|cFF00FF00[DUI]|r Auto-selected split into %d parts based on raid size (%d members).", splitParts, numMembers))
+        print(string.format("|cFF00FF00[DUI]|r Auto-selected split into %d parts based on raid size (%d online members).", splitParts, numMembers))
     end
-
-    local roster = {}
-    local groups_opted_max = 0
-
-    -- 1. Collect names from enabled groups
-    for i = 1, 8 do
-        if GROUPS_OPT[i] then
-            groups_opted_max = groups_opted_max + 1
-            for j = 1, 5 do
-                local idx = (i - 1) * 5 + j
-                local eb = popout.Edits[idx]
-                local name = strtrim(eb:GetText())
-                if name and name ~= "" then
-                    table.insert(roster, {name = name, prio = GetPlayerPrio(name)})
-                end
-            end
-        end
-    end
-
-    -- Pull from current raid roster if arranger is empty
-    if #roster == 0 then
-        if IsInRaid() then
-            for i = 1, GetNumGroupMembers() do
-                local name = GetRaidRosterInfo(i)
-                if name then
-                    table.insert(roster, {name = Ambiguate(name, "short"), prio = GetPlayerPrio(name)})
-                end
-            end
-        end
-    end
-
-    if #roster == 0 then return end
     -- Clear existing names in enabled groups before redistribution
     for i = 1, 8 do
         if GROUPS_OPT[i] then
@@ -109,6 +137,41 @@ function DUI_SplitRoster()
         if GROUPS_OPT[i] then
             table.insert(enabledGroups, i)
         end
+    end
+
+    -- Park the offline players from the highest enabled group down (group 8 on
+    -- defaults), taking whole groups out of the split so nobody online is dealt
+    -- in beside them. At least one group is kept for the online players; any
+    -- offline overflow past that is reported below with the rest of the unplaced.
+    local unplaced = 0
+    if #parked > 0 then
+        table.sort(parked)
+        local parkGroups = math.ceil(#parked / 5)
+        if #roster > 0 then
+            parkGroups = math.min(parkGroups, #enabledGroups - 1)
+        else
+            parkGroups = math.min(parkGroups, #enabledGroups)
+        end
+        local placed = 0
+        for _ = 1, parkGroups do
+            local g = table.remove(enabledGroups)
+            for j = 1, 5 do
+                placed = placed + 1
+                if not parked[placed] then break end
+                local eb = popout.Edits[(g - 1) * 5 + j]
+                eb:SetText(parked[placed])
+                eb:SetCursorPosition(0)
+            end
+        end
+        unplaced = math.max(0, #parked - parkGroups * 5)
+        if parkGroups > 0 then print(string.format("|cFF00FF00[DUI]|r %d offline player(s) moved out of the split.", #parked - unplaced)) end
+    end
+
+    if #roster == 0 then
+        if unplaced > 0 then
+            print(string.format("|cFFFFAA00[DUI]|r %d player(s) did not fit in the enabled groups. Enable more groups (right-click Split).", unplaced))
+        end
+        return
     end
 
     -- Size the bundles per part, not for the raid as a whole. Players are dealt
@@ -199,7 +262,6 @@ function DUI_SplitRoster()
         end
     end
 
-    local unplaced = 0
     local currentPart = 1
     for i = 1, #roster do
         local targetGroup = FindGroup(currentPart)

@@ -30,7 +30,9 @@
 -- Master toggle scope: off means PGF does nothing at all. The Dialog wrappers below
 -- stop filtering, the dialog and the PGF checkbox; every other hook PGF installs
 -- (entry decorations, tooltips, one-click / skip-dialog / Enter sign-up, compact
--- rows) asks PGF.MasterEnabled() first, via a `DUI:` guard in the vendored file.
+-- rows, the declined-group re-apply in ApplicationStatus.lua) asks
+-- PGF.MasterEnabled() first, via a `DUI:` guard in the vendored file. Main.lua's
+-- PGF.resultsPublished flag is what lets switching off restore Blizzard's full list.
 -- Those used to keep running on their own settings with the master off.
 -------------------------------------------------------------------------------
 
@@ -106,7 +108,21 @@ function DUI_LFGFilterApplyEnabled(enabled)
     Dialog:Toggle()
 
     -- Re-run the filter so the visible list picks it back up (or drops it).
-    if LFGListFrame and LFGListFrame.SearchPanel and LFGListFrame.SearchPanel:IsVisible() then
+    --
+    -- Switching off has to undo more than re-filtering can: FilterSearchResults bails
+    -- straight away when disabled, so the list PGF last published into
+    -- SearchPanel.results - with its hidden groups and its rating sort - stayed on
+    -- screen until the next search. Blizzard's own UpdateResultList rebuilds the list
+    -- from the client; its PGF hook runs after it and bails on the same check.
+    -- Only when something was published: otherwise Blizzard's list is still its own
+    -- and untainted, and rewriting it from here would taint it for nothing.
+    local panel = LFGListFrame and LFGListFrame.SearchPanel
+    if not MasterEnabled() then
+        if panel and PGF.resultsPublished and LFGListSearchPanel_UpdateResultList then
+            LFGListSearchPanel_UpdateResultList(panel)
+            LFGListSearchPanel_UpdateResults(panel)
+        end
+    elseif panel and panel:IsVisible() then
         PGF.FilterSearchResults()
     end
     -- Row height is set on the scroll view, not per entry, so compact rows have to

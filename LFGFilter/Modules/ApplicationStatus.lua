@@ -78,6 +78,7 @@ end
 
 function PGF.HandleLFGListFrameDeclineStatus(key)
     if not PGF.IsRetail() then return end
+    if not PGF.MasterEnabled() then return end -- DUI: master toggle - leave Blizzard's declines alone
     if not DanUIDB.LFGFilter.settings.signUpDeclined then return end
     if not LFGListFrame.declines then return end
 

@@ -470,6 +470,13 @@ function DUI_InitCombatAlerts()
     end
 
     SetDeathEventsRegistered(db.enabled and db.deathAlert)
+    -- Switched off mid-countdown or mid-Test: take the watch and the icon down now,
+    -- rather than on the watch's next frame or the Test's 5s timer.
+    if not PullAlertActive() then
+        pullEndTime = 0
+        frame:SetScript("OnUpdate", nil)
+        HidePullIcon()
+    end
     DUI_UpdatePullAlertIcon()
 
     -- Hook BigWigs if available. We use the dedicated pull messages, which carry the

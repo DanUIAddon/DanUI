@@ -470,6 +470,13 @@ function M.StopPayout()
     if M.payoutExecutor then M.payoutExecutor:Stop() end
 end
 
+-- Apply hook for the main window's rail. Start already refuses while the row is off;
+-- this pauses a payout that was mid-send when it was unticked. A pause, not a reset:
+-- the queue and progress stay, so ticking it back on and pressing Start resumes.
+function DUI_AutoPayoutApplyEnabled(enabled)
+    if not enabled and M.isPayoutInProgress then M.StopPayout() end
+end
+
 function M.OnDone()
     if M.payoutExecutor then M.payoutExecutor:Halt() end
     -- Flush any pending mail into history before resetting.

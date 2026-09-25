@@ -511,6 +511,7 @@ end
 function PGF.OnLFGListSearchPanelUpdateResultList(self)
     PGF.Logger:Debug("PGF.OnLFGListSearchPanelUpdateResultList")
     PGF.currentSearchResults = self.results
+    PGF.resultsPublished = false -- DUI: Blizzard just rebuilt the list, so it is its own again
     PGF.ResetSearchEntries()
     PGF.FilterSearchResults()
 end
@@ -544,6 +545,7 @@ function PGF.FilterSearchResults()
     end
 
     -- publish
+    PGF.resultsPublished = true -- DUI: the master toggle has to hand the full list back
     LFGListFrame.SearchPanel.results = results
     LFGListFrame.SearchPanel.totalResults = PGF.GetDisplayedSearchResultCount(
         results, LFGListFrame.SearchPanel.applications)

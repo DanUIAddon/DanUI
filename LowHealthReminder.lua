@@ -229,18 +229,28 @@ frame:SetScript("OnEvent", function(self, event)
     UpdateLiveState()
 end)
 
--- BAG_UPDATE alone fires in bursts on every loot, vendor sale and consumable use, so
+-- Bag events fire in bursts on every loot, vendor sale and consumable use, so
 -- while the module is off these registrations were paying for a full RefreshItemCache
 -- pass per burst to reach a guard that discards the result. The appearance pass owns
 -- the enabled flag, so it turns the whole set on and off.
+--
+-- BAG_UPDATE_DELAYED rather than BAG_UPDATE: the plain event fires once per bag
+-- touched, the delayed one once at the end of the burst, and only the settled
+-- counts matter here.
+--
+-- UNIT_HEALTH is the fallback for when the hook onto Blizzard's warning frame
+-- (below) is not in, so it is left off once that hook takes. In combat it fires
+-- on every point of damage or healing taken, and with the hook installed each one
+-- only ever reached a throttle and a no-op Hide.
 local reminderEventsOn = false
+local hooked = false -- set by TryHookLowHealthFrame below
 function SetReminderEventsRegistered(on)
     on = on and true or false
     if on == reminderEventsOn then return end
     reminderEventsOn = on
     if on then
-        frame:RegisterUnitEvent("UNIT_HEALTH", "player")
-        frame:RegisterEvent("BAG_UPDATE")
+        if not hooked then frame:RegisterUnitEvent("UNIT_HEALTH", "player") end
+        frame:RegisterEvent("BAG_UPDATE_DELAYED")
         frame:RegisterEvent("BAG_UPDATE_COOLDOWN")
         frame:RegisterEvent("PLAYER_ENTERING_WORLD")
         frame:RegisterEvent("PLAYER_REGEN_DISABLED")
@@ -249,16 +259,20 @@ function SetReminderEventsRegistered(on)
         frame:UnregisterAllEvents()
         frame:Hide()
         wasLow = false
+        if activeSoundHandle then
+            StopSound(activeSoundHandle, 200)
+            activeSoundHandle = nil
+        end
     end
 end
 SetReminderEventsRegistered(true)
 
 -- Hook Blizzard's warning frame for an exact edge trigger. It may not exist yet at
 -- file load, so this is retried from PLAYER_ENTERING_WORLD until it takes.
-local hooked = false
 local function TryHookLowHealthFrame()
     if hooked or not LowHealthFrame or not LowHealthFrame.HookScript then return end
     hooked = true
+    frame:UnregisterEvent("UNIT_HEALTH") -- the hook is the trigger from here on
     local function OnBlizzardWarningToggled()
         if DUI_IsConfigOpen("DUI_LowHealthReminderConfig") then return end
         UpdateLiveState()

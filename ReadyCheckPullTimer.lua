@@ -33,6 +33,7 @@ function DUI_GetReadyCheckPullTimerDefaults()
         pullDuration = 15,
         minDurability = 80,
         autoNagWarlocks = true,
+        cancelPullOnReadyLoss = true,
     }
 end
 
@@ -322,18 +323,20 @@ local function CreateReadyOverlay()
         local r, g, b = FuseColor(pct)
 
         self.bar:SetValue(remaining)
-        self.bar:SetStatusBarColor(r, g, b)
         -- The readout is a tenth of a second, so it changes 10x a second while this
         -- runs every frame. Skipping the format and the FontString relayout on the
-        -- frames in between is the same guard CombatTime and the castbar use.
+        -- frames in between is the same guard CombatTime and the castbar use. The
+        -- fuse colour rides the same gate: over a 35s check it moves ~0.3% per
+        -- tenth, so repainting it every frame bought nothing anyone can see.
         local tenths = math.floor(remaining * 10 + 0.5)
         if tenths ~= self.shownTenths then
             self.shownTenths = tenths
             -- Formatted from the key, not from `remaining`, so the string cannot
             -- disagree with the key that gates it. See CastbarModule's OnUpdate.
             self.timeText:SetFormattedText("%.1fs", tenths / 10)
+            self.timeText:SetTextColor(r, g, b)
+            self.bar:SetStatusBarColor(r, g, b)
         end
-        self.timeText:SetTextColor(r, g, b)
 
         -- Final-stretch pulse on the border, so a window sitting at the edge of the
         -- eye still gets noticed before the check expires.
@@ -471,6 +474,99 @@ local function StartAutoPull()
     print("|cFF00FF00[DUI]|r Everyone is ready! Starting " .. duration .. "s pull timer.")
 end
 
+-- ---- Cancel the pull when a ready player goes down ---------------------------
+-- Someone who answered Ready and then dies (a mechanic left on the floor, a fall) or
+-- disconnects before the countdown ends makes the pull a wipe in waiting, so the
+-- countdown is called off with the same /pull 0 a lead would type.
+--
+-- Only players who were alive and online *when they answered* are watched. A dead
+-- raider clicking Ready would otherwise cancel every pull after that check -- the
+-- transition is what counts, not the state.
+--
+-- One cancel per ready check: after it fires, a pull the lead sends by hand with that
+-- player still down is the deliberate choice and is left alone.
+--
+-- The watch covers any countdown started while a ready check is recent -- the
+-- auto-pull and a /pull typed during or just after the check alike -- and nothing
+-- else, so a pull an hour later isn't judged by who clicked Ready an hour ago.
+local PULL_WATCH_GRACE = 60  -- seconds after the check's own window that a pull still counts
+local readyWasUp = {}        -- name -> true: answered Ready while alive and online
+local pullWatchUntil = 0     -- a countdown started before this is watched; 0 once spent
+local pullWatchGen = 0
+
+-- Feign Death reads as dead to UnitIsDeadOrGhost, and a hunter testing it pre-pull is
+-- not a reason to call the pull.
+local function UnitDownReason(unit)
+    if not UnitIsConnected(unit) then return "went offline" end
+    if UnitIsDeadOrGhost(unit) and not UnitIsFeignDeath(unit) then return "died" end
+end
+
+local SetPullWatch -- forward: the watcher's handler and the cancel both reach it
+
+local function CancelPull(name, reason)
+    pullWatchUntil = 0
+    SetPullWatch(false)
+    -- Re-checked here as well as at arming: rank can change mid-countdown, and the
+    -- pull may already have happened in the frame this was heard.
+    if not UnitIsGroupLeader("player") and not UnitIsGroupAssistant("player") then return end
+    if InCombatLockdown() or IsEncounterInProgress() then return end
+    -- DoCountdown(0) is the client countdown's cancel, which BigWigs and DBM both
+    -- follow (the same path StartAutoPull starts it through). Several DanUI assists
+    -- may send it in the same moment; a second cancel is a no-op.
+    if C_PartyInfo and C_PartyInfo.DoCountdown then
+        C_PartyInfo.DoCountdown(0)
+    else
+        local editBox = ChatEdit_ChooseBoxForSend()
+        editBox:SetText("/pull 0")
+        ChatEdit_SendText(editBox)
+    end
+    print(string.format("|cFF00FF00[DUI]|r Pull cancelled: |cffffffff%s|r %s after answering Ready.", name, reason))
+end
+
+local function CheckReadyUnit(unit)
+    if not PullTimerActive() then SetPullWatch(false) return end
+    local name = UnitName(unit)
+    if not name or IsSecret(name) or not readyWasUp[name] then return end
+    local reason = UnitDownReason(unit)
+    if reason then CancelPull(name, reason) end
+end
+
+-- UNIT_HEALTH carries deaths, UNIT_CONNECTION disconnects; UNIT_FLAGS is the same
+-- belt-and-braces CombatAlerts' death watch uses. Registered only while a watched
+-- countdown runs (60s at most, out of combat), so the raid-wide UNIT_HEALTH load is
+-- not carried for the rest of the night.
+local pullWatcher = DUI_CreateGroupUnitWatcher({ "UNIT_HEALTH", "UNIT_FLAGS", "UNIT_CONNECTION" }, function(_, _, unit)
+    if db and db.enabled and db.cancelPullOnReadyLoss then CheckReadyUnit(unit) end
+end)
+
+-- Every call bumps the generation, so a stale expiry timer from an earlier countdown
+-- can't drop the watch on a newer one.
+SetPullWatch = function(on)
+    pullWatchGen = pullWatchGen + 1
+    pullWatcher:SetRegistered(on)
+end
+
+-- Called on START_PLAYER_COUNTDOWN, after pullEndTime is set.
+local function ArmPullWatch(duration)
+    if not db.cancelPullOnReadyLoss or GetTime() > pullWatchUntil or not next(readyWasUp) then return end
+    -- A client without lead or assist couldn't cancel anything; it shouldn't carry
+    -- UNIT_HEALTH for the whole raid to find that out.
+    if not UnitIsGroupLeader("player") and not UnitIsGroupAssistant("player") then return end
+
+    SetPullWatch(true)
+    local gen = pullWatchGen
+    C_Timer.After(duration + 0.5, function()
+        if gen == pullWatchGen then SetPullWatch(false) end
+    end)
+
+    -- Someone can have gone down between answering and the pull being sent.
+    local n = GetNumGroupMembers()
+    for i = 1, n do
+        CheckReadyUnit(GetUnitID(i, n))
+        if pullWatchUntil == 0 then break end
+    end
+end
+
 -- The master toggle drives registration rather than an early return in the handler,
 -- so a disabled module is genuinely inert instead of merely quiet.
 local readyCheckEventsOn = false
@@ -501,6 +597,27 @@ local NAG_MSG = "NAG1:"      -- versioned so a later format can't be misread as 
 local CLAIM_WINDOW = 6       -- a claim older than this belongs to a previous ready check
 
 local claims = {}            -- Name-Realm -> { t = GetTime(), init = bool }
+
+-- CHAT_MSG_ADDON is heard only while an election is open. It fires for every
+-- registered prefix of every addon in the group -- BigWigs/DBM syncs, Details!,
+-- WeakAuras, MRT -- so leaving it on for the module's lifetime woke the handler
+-- constantly through a raid night to read a claim that only matters for the ~2s
+-- after a ready check. Opened on READY_CHECK, before this client sends its own
+-- claim: the others send theirs only after *their* READY_CHECK, which the server
+-- broadcast to us first, so a claim cannot beat the registration here.
+-- The generation counter keeps an older election's timer from closing a newer one.
+local electionGen = 0
+
+local function OpenElection()
+    electionGen = electionGen + 1
+    ReadyFrame:RegisterEvent("CHAT_MSG_ADDON")
+    return electionGen
+end
+
+local function CloseElection(gen)
+    if gen ~= electionGen then return end
+    ReadyFrame:UnregisterEvent("CHAT_MSG_ADDON")
+end
 
 -- A failed register only loses the election's input; the send below notices that and
 -- falls back to the initiator rule, so this is not worth erroring over.
@@ -569,6 +686,7 @@ end
 local function MaybeNagWarlocks(initiator)
     if not DUI_AutoNagWarlocks or not IsInGroup() then return end
 
+    local gen = OpenElection()
     local init = StartedByPlayer(initiator)
     local me = MyFullName()
     if me then claims[me] = { t = GetTime(), init = init } end
@@ -581,6 +699,11 @@ local function MaybeNagWarlocks(initiator)
     -- any /duirc preview on screen has been replaced by a live scan by the time this
     -- fires -- and the other clients' claims have had time to arrive.
     C_Timer.After(NAG_DELAY, function()
+        -- Every claim that counts has arrived by now; ElectedSender reads the table,
+        -- not the event, so the listener can close before the vote is counted.
+        CloseElection(gen)
+        -- Re-checked: the row (or the setting) can be switched off inside the delay.
+        if not db or not db.enabled or not db.autoNagWarlocks then return end
         if commsOk then
             if ElectedSender() ~= me then return end
         elseif not init then
@@ -612,10 +735,10 @@ local function SetReadyCheckEventsRegistered(on)
         ReadyFrame:RegisterEvent("CANCEL_PLAYER_COUNTDOWN")
         -- Combat means the pull happened; a prompt still up is in the way.
         ReadyFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
-        -- Other clients' claims on the Soulstone nag (see MaybeNagWarlocks).
-        ReadyFrame:RegisterEvent("CHAT_MSG_ADDON")
+        -- CHAT_MSG_ADDON is not here: it is opened per election (see OpenElection).
     else
         ReadyFrame:UnregisterAllEvents()
+        SetPullWatch(false)
         HideOverlay()
     end
 end
@@ -633,6 +756,17 @@ ReadyFrame:SetScript("OnEvent", function(self, event, ...)
         local initiator = ...
         wipe(responses)
         if initiator then responses[initiator] = true end -- Initiator is ready by default
+
+        -- A new check replaces the old one's watch list and reopens the one cancel.
+        -- The initiator gets no READY_CHECK_CONFIRM, so they are recorded here. Keyed
+        -- short, the way UnitName hands names to CheckReadyUnit; a name that doesn't
+        -- resolve reads as offline and is simply not watched.
+        wipe(readyWasUp)
+        pullWatchUntil = GetTime() + RC_DURATION + PULL_WATCH_GRACE
+        if initiator and not IsSecret(initiator) then
+            local ok, down = pcall(UnitDownReason, initiator)
+            if ok and not down then readyWasUp[Ambiguate(initiator, "short")] = true end
+        end
 
         -- Blizzard's prompt is only hidden when ours actually took its place; in
         -- combat it stays, so the check can still be answered.
@@ -667,6 +801,9 @@ ReadyFrame:SetScript("OnEvent", function(self, event, ...)
         local name = UnitName(unit)
         if name then
             responses[name] = isReady
+            if not IsSecret(name) then
+                readyWasUp[name] = (isReady and not UnitDownReason(unit)) or nil
+            end
         end
         if UnitIsUnit(unit, "player") then
             HideOverlay()
@@ -676,10 +813,12 @@ ReadyFrame:SetScript("OnEvent", function(self, event, ...)
         local _, timeRemaining = ...
         local timeleft = (not IsSecret(timeRemaining)) and tonumber(timeRemaining) or nil
         pullEndTime = GetTime() + (timeleft or MAX_PULL)
+        ArmPullWatch(timeleft or MAX_PULL)
 
     elseif event == "CANCEL_PLAYER_COUNTDOWN" then
         -- Fires for an explicit /pull 0 and when combat cuts the countdown short.
         pullEndTime = 0
+        SetPullWatch(false)
 
     elseif event == "PLAYER_REGEN_DISABLED" then
         -- Hidden here, not on a later combat check: the window parents the secure
@@ -688,6 +827,8 @@ ReadyFrame:SetScript("OnEvent", function(self, event, ...)
         -- Blizzard's prompt goes with it, so its OnShow hook can't bring ours back.
         if overlay then overlay:Hide() end
         if ReadyCheckFrame and ReadyCheckFrame:IsShown() then ReadyCheckFrame:Hide() end
+        -- The pull happened; a death from here on is the fight, not a reason to cancel.
+        SetPullWatch(false)
 
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, text, _, sender = ...
@@ -822,6 +963,10 @@ function DUI_OpenReadyCheckPullTimerConfig()
         L:Checkbox("Auto Pull on Ready", db, "autoPull",  nil,
             { body = "Starts a pull timer automatically once everyone has answered the ready check.",
               note = "Only fires when every member answered ready, and never while a pull timer is already counting down." })
+
+        L:Checkbox("Cancel Pull if a Ready Player Goes Down", db, "cancelPullOnReadyLoss", nil,
+            { body = "Cancels the pull timer (/pull 0) when someone who answered Ready dies or goes offline before it ends.",
+              note = "Covers any pull started during or within a minute of a ready check, auto or by hand. Needs lead or assist. Cancels at most once per ready check, so a pull you resend with that player still down goes ahead." })
 
         L:Checkbox("Whisper Unstoned Warlocks", db, "autoNagWarlocks", nil,
             { body = "When a ready check starts, whispers every warlock who has not put a Soulstone out yet.",

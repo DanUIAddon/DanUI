@@ -90,6 +90,20 @@ function UpdateCharges()
     local chargeStart = chargeInfo and chargeInfo.cooldownStartTime or 0
     local chargeDuration = chargeInfo and chargeInfo.cooldownDuration or 0
 
+    -- SPELL_UPDATE_CHARGES is not per spell: it fires whenever *any* of the player's
+    -- charge spells moves, which for most classes is several times a pull. The pool
+    -- itself rarely changed, and repainting it restarted the cooldown swipe and the
+    -- m:ss readout for nothing. Skipped only while the frame is already up and the
+    -- test preview is not; the preview paints over the text, so it clears the cache
+    -- (see ToggleBRTracker) and the first real pass after it repaints in full.
+    if frame:IsShown() and not frame.isTesting
+        and charges == frame.brCharges and maxCharges == frame.brMax
+        and chargeStart == frame.brSigStart and chargeDuration == frame.brSigDuration then
+        return
+    end
+    frame.brCharges, frame.brMax = charges, maxCharges
+    frame.brSigStart, frame.brSigDuration = chargeStart, chargeDuration
+
     frame.text:SetText(charges)
     if charges == 0 then
         frame.text:SetTextColor(1, 0, 0) -- Red if 0
@@ -140,6 +154,7 @@ function ToggleBRTracker(enabled)
     if enabled == "TEST" then
         -- Manual toggle for positioning
         frame.isTesting = true
+        frame.brCharges = nil -- UpdateCharges' repaint cache no longer matches the text
         frame.text:SetText("3")
         frame:Show()
     elseif enabled then

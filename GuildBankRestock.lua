@@ -786,14 +786,21 @@ end
 
 -- Item names arrive asynchronously, and the "have" column is a live bag count.
 -- Both events are chatty, so they are only listened to while the panel is up.
+-- The first open after login sends one GET_ITEM_INFO_RECEIVED per uncached item in
+-- a burst, and each used to rebuild the whole list; they share one rebuild at the
+-- end of the frame now.
+local listRefreshQueued = false
+local function FlushListRefresh()
+    listRefreshQueued = false
+    if config:IsShown() then RefreshList() end
+end
+
 local listener = CreateFrame("Frame")
 listener:SetScript("OnEvent", function(_, event, itemID)
-    if not db then return end
-    if event == "GET_ITEM_INFO_RECEIVED" then
-        if itemID and FindEntry(itemID) then RefreshList() end
-    else
-        RefreshList()
-    end
+    if not db or listRefreshQueued then return end
+    if event == "GET_ITEM_INFO_RECEIVED" and not (itemID and FindEntry(itemID)) then return end
+    listRefreshQueued = true
+    C_Timer.After(0, FlushListRefresh)
 end)
 
 -- The status line is a clock reading, so it goes stale on a panel left open.

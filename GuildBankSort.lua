@@ -777,6 +777,12 @@ end
 -- move at a time, and interleaving them drops items back into the bank at random.
 function DUI_GuildBankSortIsBusy() return isSorting end
 
+-- Apply hook for the main window's rail. The Sort button already refuses while the
+-- row is off; this stops a sort that was already moving items when it was unticked.
+function DUI_GuildBankSortApplyEnabled(enabled)
+    if not enabled and isSorting then Sort:stopSorting() end
+end
+
 local function RestockBusy()
     if DUI_GuildBankRestockIsBusy and DUI_GuildBankRestockIsBusy() then
         print("|cff77DD77DUI_GuildBankSort:|r Restock is still running - try again when it finishes")
@@ -1293,15 +1299,23 @@ end)
 -- (GET_ITEM_INFO_RECEIVED) fires for every item the client resolves and is very
 -- frequent on login/bag opens, but only matters while the config is open, so the
 -- frame is registered/unregistered from the config's OnShow/OnHide below.
+-- Opening the panel with a list of uncached items sends one GET_ITEM_INFO_RECEIVED
+-- per item, in a burst, and each one used to rebuild the whole rule list. Collapsed
+-- onto one rebuild at the end of the frame.
+local rulesRefreshQueued = false
+local function FlushRulesRefresh()
+    rulesRefreshQueued = false
+    if config and config:IsShown() then RefreshGuildBankSortRules() end
+end
+
 local itemInfoListener = CreateFrame("Frame")
 itemInfoListener:SetScript("OnEvent", function(self, event, itemID)
-    if not itemID then return end
+    if not itemID or rulesRefreshQueued then return end
     if not db or not db.rules then return end
     for _, rule in ipairs(db.rules) do
         if rule.itemID == itemID then
-            if config and config:IsShown() then
-                RefreshGuildBankSortRules()
-            end
+            rulesRefreshQueued = true
+            C_Timer.After(0, FlushRulesRefresh)
             break
         end
     end

@@ -247,14 +247,25 @@ local function ClearRoster()
     UpdateGroupsVisibility()
 end
 
+local function StopPush()
+    isProcessing = false
+    TargetRoster = nil
+    if DUI_PushBtn then -- Defensive check
+        DUI_PushBtn:SetText("Push")
+    end
+    print("|cFF00FF00[DUI]|r Group arrangement stopped.")
+end
+
+-- Apply hook for the main window's rail. A push moves one player per roster
+-- update, so without this, unticking the row mid-arrange left it moving people
+-- until the roster matched.
+function DUI_RaidArrangerApplyEnabled(enabled)
+    if not enabled and isProcessing then StopPush() end
+end
+
 local function PushChanges()
     if isProcessing then
-        isProcessing = false
-        TargetRoster = nil
-        if DUI_PushBtn then -- Defensive check
-            DUI_PushBtn:SetText("Push")
-        end
-        print("|cFF00FF00[DUI]|r Group arrangement stopped.")
+        StopPush()
         return
     end
 

@@ -2072,7 +2072,7 @@ local DUI_MODULE_GROUPS = {
     { name = "RAID", modules = {
         { text = "Invites",            frame = "DUI_InvitesConfig",           open = "DUI_OpenInvitesConfig",             dbKey = "RaidTools", field = "autoInviteEnabled", apply = "DUI_InvitesApplyEnabled" },
         { text = "Raid Automation",    frame = "DUI_RaidAutomationConfig",    open = "DUI_OpenRaidAutomationConfig",      dbKey = "RaidAutomation",      apply = "DUI_RaidAutomationApplyEnabled" },
-        { text = "Raid Arranger",      frame = "DUI_GroupsPopout",                                                        dbKey = "RaidArranger" },
+        { text = "Raid Arranger",      frame = "DUI_GroupsPopout",                                                        dbKey = "RaidArranger",        apply = "DUI_RaidArrangerApplyEnabled" },
         { text = "Auto-Assist List",   frame = "DUI_AssistConfig",            open = "DUI_OpenAssistConfig",              dbKey = "AssistModule",        apply = "DUI_AssistApplyEnabled" },
         { text = "RC & Pull",          frame = "DUI_RCPTConfig",              open = "DUI_OpenReadyCheckPullTimerConfig", dbKey = "ReadyCheckPullTimer", apply = "DUI_ReadyCheckPullTimerApplyEnabled" },
         { text = "Break Timer",        frame = "DUI_BreakTimerConfig",        open = "DUI_OpenBreakTimerConfig",          dbKey = "BreakTimer",          apply = "DUI_BreakTimerApplyEnabled" },
@@ -2093,8 +2093,8 @@ local DUI_MODULE_GROUPS = {
         { text = "Battle Res Tracker", frame = "DUI_BattleResTrackerConfig",  open = "DUI_OpenBattleResTrackerConfig",    dbKey = "RaidTools", field = "battleResEnabled", apply = "DUI_BattleResApplyEnabled" },
     }},
     { name = "QUALITY OF LIFE", modules = {
-        { text = "Guild Bank Sorter",  frame = "DUI_GuildBankSortConfig",     open = "DUI_OpenGuildBankSortConfig",       dbKey = "GuildBankSort" },
-        { text = "AutoPayout",         frame = "DUI_AutoPayoutConfig",        open = "DUI_OpenAutoPayoutConfig",          dbKey = "AutoPayout" },
+        { text = "Guild Bank Sorter",  frame = "DUI_GuildBankSortConfig",     open = "DUI_OpenGuildBankSortConfig",       dbKey = "GuildBankSort",       apply = "DUI_GuildBankSortApplyEnabled" },
+        { text = "AutoPayout",         frame = "DUI_AutoPayoutConfig",        open = "DUI_OpenAutoPayoutConfig",          dbKey = "AutoPayout",          apply = "DUI_AutoPayoutApplyEnabled" },
         { text = "Guild Bank Restock", frame = "DUI_GuildBankRestockConfig",  open = "DUI_OpenGuildBankRestockConfig",    dbKey = "GuildBankRestock",    apply = "DUI_GuildBankRestockApplyEnabled" },
         { text = "Warbank Gold",       frame = "DUI_WarbankGoldConfig",       open = "DUI_OpenWarbankGoldConfig",         dbKey = "WarbankGold",         apply = "DUI_WarbankGoldApplyEnabled" },
         { text = "Automation",         frame = "DUI_AutomationConfig",        open = "DUI_OpenAutomationConfig",          dbKey = "Automation",          apply = "DUI_AutomationApplyEnabled" },
