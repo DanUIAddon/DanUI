@@ -2018,14 +2018,21 @@ EventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
     elseif event == "GROUP_ROSTER_UPDATE" then
         if not rosterTimer then rosterTimer = C_Timer.NewTimer(0.2, FlushRosterUpdate) end
     elseif event == "READY_CHECK" then
-        if not InCombatLockdown() and DUI_ReadyCheckWindowEnabled and DUI_ReadyCheckWindowEnabled() then
+        if not InCombatLockdown() and DUI_ReadyCheckWindowEnabled and DUI_ReadyCheckWindowEnabled()
+           and DUI_ReadyCheckWindowDB().openOnReadyCheck then
             rcAuraWatcher:SetRegistered(true)
             local timeLeft = 35; if DUI_ReadyCheckFrame then DUI_ReadyCheckFrame.Title:SetText("Ready Check: 35s"); DUI_ReadyCheckFrame:Show(); UpdateRCWindow() end
             if RC_Ticker then RC_Ticker:Cancel() end
             RC_Ticker = C_Timer.NewTicker(1, function() timeLeft = timeLeft - 1; if DUI_ReadyCheckFrame then DUI_ReadyCheckFrame.Title:SetText("Ready Check: " .. timeLeft .. "s") end; if timeLeft <= 0 then RC_Ticker:Cancel() end end)
         end
     elseif event == "READY_CHECK_CONFIRM" then if DUI_ReadyCheckFrame and DUI_ReadyCheckFrame:IsShown() then DUI_QueueReadyCheckRefresh() end
-    elseif event == "READY_CHECK_FINISHED" then rcAuraWatcher:SetRegistered(false); if RC_Ticker then RC_Ticker:Cancel() end; C_Timer.After(10, function() if not InCombatLockdown() and DUI_ReadyCheckFrame then DUI_ReadyCheckFrame:Hide() end end)
+    elseif event == "READY_CHECK_FINISHED" then
+        rcAuraWatcher:SetRegistered(false); if RC_Ticker then RC_Ticker:Cancel() end
+        -- "Close After Check" on the Ready Check Window panel; 0 leaves it up.
+        local delay = DUI_ReadyCheckWindowDB and DUI_ReadyCheckWindowDB().closeDelay or 10
+        if delay > 0 then
+            C_Timer.After(delay, function() if not InCombatLockdown() and DUI_ReadyCheckFrame then DUI_ReadyCheckFrame:Hide() end end)
+        end
     end
 end)
 
@@ -2034,6 +2041,8 @@ end)
 -- locals. Turning it off mid-check takes the window down and stops both; turning it
 -- on mid-check does not reopen it - the next ready check will.
 function DUI_ReadyCheckWindowApplyEnabled(on)
+    -- The Soulstone whisper rides this row too; it owns its own event registration.
+    if DUI_SyncReadyCheckNag then DUI_SyncReadyCheckNag() end
     if on then return end
     if RC_Ticker then RC_Ticker:Cancel() end
     rcAuraWatcher:SetRegistered(false)

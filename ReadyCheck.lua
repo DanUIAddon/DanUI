@@ -19,33 +19,84 @@ local ICON_SS           = "Interface\\Icons\\Inv_misc_orb_04"
 local ICON_SOM          = 4630412
 local ICON_FLASK_DEFAULT = "Interface\\Icons\\Trade_Alchemy"
 
--- Column definitions drive the header icons, the per-row cells, and their tooltips.
--- `icon` is shown desaturated/dim as a placeholder and full-colour when the buff is found.
+-- Column definitions drive the header labels, the per-row cells, their tooltips and
+-- the module panel's tick list. `icon` is shown desaturated/dim as a placeholder and
+-- full-colour when the buff is found. `x` is not fixed: ApplyLayout packs the columns
+-- the user has ticked and writes it, and `group` puts a wider gap between the
+-- consumables and the raid buffs.
 local COLUMNS = {
-    { key = "food",   x = 180, icon = ICON_FOOD_DEFAULT, name = "Food (Well Fed)" },
-    { key = "flask",  x = 220, icon = ICON_FLASK_DEFAULT, name = "Flask / Phial" },
-    { key = "vantus", x = 260, icon = ICON_VANTUS,        name = "Vantus Rune" },
-    { key = "rune",   x = 300, icon = ICON_RUNE_DEFAULT,  name = "Augment Rune" },
-    { key = "stam",   x = 345, icon = ICON_STAM,          name = "Stamina" },
-    { key = "int",    x = 385, icon = ICON_INT,           name = "Intellect" },
-    { key = "ap",     x = 425, icon = ICON_AP,            name = "Attack Power" },
-    { key = "vers",   x = 465, icon = ICON_VERS,          name = "Versatility" },
-    { key = "mast",   x = 505, icon = ICON_MAST,          name = "Mastery" },
-    { key = "move",   x = 545, icon = ICON_MOVE,          name = "Movement" },
+    { key = "food",   label = "Food", group = "cons", icon = ICON_FOOD_DEFAULT,  name = "Food (Well Fed)" },
+    { key = "flask",  label = "Flsk", group = "cons", icon = ICON_FLASK_DEFAULT, name = "Flask / Phial" },
+    { key = "vantus", label = "Vant", group = "cons", icon = ICON_VANTUS,        name = "Vantus Rune" },
+    { key = "rune",   label = "Rune", group = "cons", icon = ICON_RUNE_DEFAULT,  name = "Augment Rune" },
+    { key = "stam",   label = "Stam", group = "raid", icon = ICON_STAM,          name = "Stamina" },
+    { key = "int",    label = "Int",  group = "raid", icon = ICON_INT,           name = "Intellect" },
+    { key = "ap",     label = "AP",   group = "raid", icon = ICON_AP,            name = "Attack Power" },
+    { key = "vers",   label = "Vers", group = "raid", icon = ICON_VERS,          name = "Versatility" },
+    { key = "mast",   label = "Mast", group = "raid", icon = ICON_MAST,          name = "Mastery" },
+    { key = "move",   label = "Move", group = "raid", icon = ICON_MOVE,          name = "Movement" },
 }
+
+-- Column pitch: the first cell's x, the step between cells, the extra gap between
+-- groups, and what is left past the last cell. With all ten on these reproduce the
+-- old fixed 590px window exactly.
+local COL_X0, COL_STEP, COL_GROUP_GAP, COL_TAIL = 180, 40, 5, 29
+-- Narrowest the window goes with most columns off: the footer's rows need the room.
+local MIN_W = 400
+
+-- ---- Settings -----------------------------------------------------------------
+-- DanUIDB.ReadyCheckWindow. Columns are flat `col_<key>` flags rather than a nested
+-- table because DUI_InitModuleDB backfills one level only.
+function DUI_GetReadyCheckWindowDefaults()
+    local d = {
+        enabled = true,
+        openOnReadyCheck = true,
+        closeDelay = 10,
+        sortByMissing = true,
+        maxRows = 20,
+        scale = 1,
+        showSoulstone = true,
+        showSourceOfMagic = true,
+        autoNagWarlocks = true,
+    }
+    for _, col in ipairs(COLUMNS) do d["col_" .. col.key] = true end
+    return d
+end
+
+local DEFAULTS = DUI_GetReadyCheckWindowDefaults()
+
+-- The live table once ADDON_LOADED has seeded it; the defaults before that, so
+-- nothing here has to nil-check its way through the first frame.
+local function Settings()
+    return (DanUIDB and DanUIDB.ReadyCheckWindow) or DEFAULTS
+end
+function DUI_ReadyCheckWindowDB() return Settings() end
+
+local function ColumnOn(col) return Settings()["col_" .. col.key] ~= false end
 
 -- Footer geometry. The assignments card is pinned to the bottom of the window and
 -- the roster stops above it, so the scroll frame's bottom inset and the window's
--- height both derive from these rather than repeating a magic 80.
-local FOOTER_PAD, FOOTER_H = 8, 72
-local SCROLL_BOTTOM = FOOTER_PAD + FOOTER_H + 8
+-- height both derive from these. The card loses a row for each assignment row
+-- switched off, and goes away (taking its inset with it) when both are.
+local FOOTER_PAD, FOOTER_CAPTION_H, FOOTER_ROW_H = 8, 24, 22
+local scrollBottom = FOOTER_PAD + FOOTER_CAPTION_H + 2 * FOOTER_ROW_H + 4 + 8
+local windowW = 590
 
 local RCFrame = CreateFrame("Frame", "DUI_ReadyCheckFrame", UIParent, "BackdropTemplate")
 RCFrame:SetSize(590, 500); RCFrame:SetPoint("CENTER", 320, 0); RCFrame:Hide()
 RCFrame:SetFrameStrata("TOOLTIP")
 RCFrame:SetMovable(true); RCFrame:EnableMouse(true); RCFrame:RegisterForDrag("LeftButton")
 RCFrame:SetClampedToScreen(true)
-RCFrame:SetScript("OnDragStart", RCFrame.StartMoving); RCFrame:SetScript("OnDragStop", RCFrame.StopMovingOrSizing)
+RCFrame:SetScript("OnDragStart", RCFrame.StartMoving)
+-- Remembered across sessions; the panel's Reset Position puts it back.
+RCFrame:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    local t = DanUIDB and DanUIDB.ReadyCheckWindow
+    if t then
+        local point, _, relPoint, x, y = self:GetPoint(1)
+        t.point = { point, relPoint, x, y }
+    end
+end)
 RCFrame:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", tile = false, tileSize = 0, edgeSize = 1, insets = { left = 0, right = 0, top = 0, bottom = 0 } })
 RCFrame:SetBackdropColor(unpack(DUI_Theme.MainBG)); RCFrame:SetBackdropBorderColor(unpack(DUI_Theme.Accent))
 DUI_RegisterAccent(RCFrame, "border")
@@ -66,13 +117,13 @@ local function CreateHeader(text, x)
     return h
 end
 local ColNamesHeader = CreateHeader("Player (0/0 Ready)", 15)
-CreateHeader("Food", 180); CreateHeader("Flsk", 220); CreateHeader("Vant", 260); CreateHeader("Rune", 300)
-CreateHeader("Stam", 345); CreateHeader("Int", 385); CreateHeader("AP", 425); CreateHeader("Vers", 465); CreateHeader("Mast", 505); CreateHeader("Move", 545)
+for _, col in ipairs(COLUMNS) do col.header = CreateHeader(col.label, 0) end
 
 -- Forward declaration: the footer below re-scans the roster (on click, and on a
 -- throttled refresh), but ScanUnit is defined further down next to the display code
 -- that also uses it.
 local ScanUnit
+local CountMissing
 
 -- The window sits in the "TOOLTIP" strata, so a plain GameTooltip renders behind its
 -- cells/text. Anchor it, then lift its frame level above the window so it shows on top.
@@ -109,7 +160,7 @@ local blindNoticeShown = false
 
 local Footer = CreateFrame("Frame", nil, RCFrame, "BackdropTemplate")
 Footer:SetPoint("BOTTOMLEFT", FOOTER_PAD, FOOTER_PAD); Footer:SetPoint("BOTTOMRIGHT", -FOOTER_PAD, FOOTER_PAD)
-Footer:SetHeight(FOOTER_H)
+Footer:SetHeight(FOOTER_CAPTION_H + 2 * FOOTER_ROW_H + 4)
 Footer:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
 Footer:SetBackdropColor(0, 0, 0, 0.35); Footer:SetBackdropBorderColor(0, 0, 0, 1)
 
@@ -466,7 +517,7 @@ local function QueueAssignmentRefresh()
 end
 
 local ScrollFrame = CreateFrame("ScrollFrame", "DUI_RCScrollFrame", RCFrame, "BackdropTemplate")
-ScrollFrame:SetPoint("TOPLEFT", 1, -60); ScrollFrame:SetPoint("BOTTOMRIGHT", -20, SCROLL_BOTTOM)
+ScrollFrame:SetPoint("TOPLEFT", 1, -60); ScrollFrame:SetPoint("BOTTOMRIGHT", -20, scrollBottom)
 local ScrollContent = CreateFrame("Frame", "DUI_RCScrollContent", ScrollFrame); ScrollContent:SetSize(568, 1); ScrollFrame:SetScrollChild(ScrollContent)
 local ScrollBar = CreateFrame("Slider", "DUI_RCScrollBar", RCFrame, "BackdropTemplate")
 ScrollBar:SetSize(12, 1); ScrollBar:SetPoint("TOPLEFT", ScrollFrame, "TOPRIGHT", 4, 0); ScrollBar:SetPoint("BOTTOMLEFT", ScrollFrame, "BOTTOMRIGHT", 4, 0)
@@ -491,7 +542,7 @@ end
 
 local function CreateCell(row, col)
     local cell = CreateFrame("Button", nil, row)
-    cell:SetSize(16, 16); cell:SetPoint("LEFT", row, "LEFT", col.x, 0)
+    cell:SetSize(16, 16)
     cell.tex = cell:CreateTexture(nil, "OVERLAY"); cell.tex:SetAllPoints()
     cell.col = col
     cell:SetScript("OnEnter", function(self)
@@ -515,7 +566,7 @@ local function ShowRowTooltip(row)
     if d.role and d.role ~= "NONE" then GameTooltip:AddLine(d.role, 0.7, 0.7, 0.7) end
     local missing = {}
     for _, col in ipairs(COLUMNS) do
-        if not d.found[col.key] then missing[#missing + 1] = col.name end
+        if ColumnOn(col) and not d.found[col.key] then missing[#missing + 1] = col.name end
     end
     if #missing > 0 then
         GameTooltip:AddLine("Missing: " .. table.concat(missing, ", "), 1, 0.3, 0.3, true)
@@ -551,6 +602,17 @@ end
 -- which is up to 1600 throwaway closures per full roster scan -- and a full scan is
 -- what a ready check runs.
 local function ProbeReadable(v) return v == v end
+
+-- Only the columns on screen count: the sort and the row tooltip are about what the
+-- user chose to track, and an untracked buff shouldn't push someone to the top.
+-- The scan itself still reads every buff - the cost is in the aura walk, not here.
+CountMissing = function(found)
+    local missing = 0
+    for _, col in ipairs(COLUMNS) do
+        if ColumnOn(col) and not found[col.key] then missing = missing + 1 end
+    end
+    return missing
+end
 
 -- Which warlock/evoker a buff belongs to. Both Soulstone and Source of Magic sit on
 -- the *recipient*, so the only way to tell who still owes one is the aura's caster.
@@ -608,9 +670,7 @@ function ScanUnit(i, numMembers)
     data.hasSS, data.hasSoM = hasSS, hasSoM
     data.aurasRead = aurasRead
     data.ssCaster, data.somCaster = ResolveCaster(ssSource), ResolveCaster(somSource)
-    local missing = 0
-    for _, col in ipairs(COLUMNS) do if not found[col.key] then missing = missing + 1 end end
-    data.missing = missing
+    data.missing = CountMissing(found)
     return data
 end
 
@@ -629,6 +689,9 @@ local function RowGradient(class)
     end
     return g[1], g[2], g[3]
 end
+
+-- Bumped by ApplyLayout; a row painted under an older layout re-anchors its cells.
+local layoutGen = 1
 
 -- Paints scanned data into a display row.
 local function PaintRow(row, data)
@@ -649,6 +712,14 @@ local function PaintRow(row, data)
         row.readyIcon:Hide()
     end
 
+    if row.layoutGen ~= layoutGen then
+        row.layoutGen = layoutGen
+        for _, col in ipairs(COLUMNS) do
+            local cell = row.cells[col.key]
+            cell:ClearAllPoints(); cell:SetPoint("LEFT", row.frame, "LEFT", col.x or 0, 0)
+            cell:SetShown(ColumnOn(col))
+        end
+    end
     for _, col in ipairs(COLUMNS) do SetCell(row.cells[col.key], data.found[col.key]) end
     row.frame:Show()
 end
@@ -678,14 +749,18 @@ end
 -- and, in doing so, drops any preview that was on screen.
 function UpdateRCWindow(datas)
     local numMembers = datas and #datas or math.max(GetNumGroupMembers(), 1)
-    local displayCount = math.min(numMembers, 20)
-    RCFrame:SetHeight(math.max(228, 65 + SCROLL_BOTTOM + (displayCount * 20))); ScrollContent:SetHeight(numMembers * 20)
-    local showScroll = numMembers > 20
+    local maxRows = Settings().maxRows or 20
+    local displayCount = math.min(numMembers, maxRows)
+    -- The floor keeps a small group's window tall enough for the footer card; with
+    -- the card off, a one-row window can be as short as its content.
+    local floor = Footer:IsShown() and 228 or 110
+    RCFrame:SetHeight(math.max(floor, 65 + scrollBottom + (displayCount * 20))); ScrollContent:SetHeight(numMembers * 20)
+    local showScroll = numMembers > maxRows
     ScrollBar:SetShown(showScroll)
     if showScroll then
-        ScrollBar:SetMinMaxValues(0, (numMembers - 20) * 20); ScrollFrame:SetPoint("BOTTOMRIGHT", -20, SCROLL_BOTTOM); ScrollContent:SetWidth(568)
+        ScrollBar:SetMinMaxValues(0, (numMembers - maxRows) * 20); ScrollFrame:SetPoint("BOTTOMRIGHT", -20, scrollBottom); ScrollContent:SetWidth(windowW - 22)
     else
-        ScrollBar:SetValue(0); ScrollFrame:SetPoint("BOTTOMRIGHT", -2, SCROLL_BOTTOM); ScrollContent:SetWidth(586)
+        ScrollBar:SetValue(0); ScrollFrame:SetPoint("BOTTOMRIGHT", -2, scrollBottom); ScrollContent:SetWidth(windowW - 4)
     end
 
     -- Scan everyone, then sort missing-buffs-to-top (raid order breaks ties) so the
@@ -695,8 +770,9 @@ function UpdateRCWindow(datas)
         datas = {}
         for i = 1, numMembers do datas[i] = ScanUnit(i, numMembers) end
     end
+    local byMissing = Settings().sortByMissing
     table.sort(datas, function(a, b)
-        if a.missing ~= b.missing then return a.missing > b.missing end
+        if byMissing and a.missing ~= b.missing then return a.missing > b.missing end
         return a.index < b.index
     end)
 
@@ -789,6 +865,8 @@ local PREVIEWS = {
 }
 local PREVIEW_ORDER = { "partial", "covered", "doubled", "blind", "none", "solo" }
 local previewIndex = 0
+-- The preset on screen, so a settings change can repaint the preview in place.
+local previewPreset
 
 local function BuildPreviewRoster(preset)
     local datas, byName = {}, {}
@@ -797,10 +875,10 @@ local function BuildPreviewRoster(preset)
         if not (preset.noProviders and provider) then
             -- Every column filled, then the member's own gaps knocked back out, so the
             -- roster above the card looks like a real one instead of a wall of icons.
-            local found, missing = {}, 0
+            local found = {}
             for _, col in ipairs(COLUMNS) do found[col.key] = col.icon end
             for _, key in ipairs(m.gaps or {}) do found[key] = nil end
-            for _, col in ipairs(COLUMNS) do if not found[col.key] then missing = missing + 1 end end
+            local missing = CountMissing(found)
 
             local data = {
                 index = #datas + 1, unit = "player", name = m.name, fullName = m.name,
@@ -848,7 +926,7 @@ function DUI_PreviewReadyCheckWindow(arg)
         return
     end
 
-    previewActive = true
+    previewActive, previewPreset = true, preset
     RCFrame.Title:SetText("Raid Inspection - preview: " .. name)
     RCFrame:Show()
     UpdateRCWindow(BuildPreviewRoster(preset))
@@ -864,6 +942,7 @@ end
 function DUI_HideReadyCheckWindow()
     DUI_ReadyCheckFrame:Hide()
 end
+
 -- ===========================================================================
 -- Module: the window as its own rail row ("Ready Check Window", RAID group).
 --
@@ -871,20 +950,78 @@ end
 -- bar's Inspect button, the minimap right-click or a bare /duirc either (the rail's
 -- rule for on-demand buttons). Those say so in chat rather than doing nothing.
 -- /duirc <state> previews still open it - that is a test tool, asked for by name.
---
--- Only the window is switched. The Soulstone nag also reads ScanUnit from this file,
--- but it belongs to RC & Pull and rides that module's switch.
+-- The Soulstone whisper below belongs to this module too (it moved here from RC &
+-- Pull on 2026-10-01), so it rides this row's switch.
 -- ===========================================================================
-
-function DUI_GetReadyCheckWindowDefaults()
-    return { enabled = true }
-end
 
 -- A missing table reads as on, so the window keeps working before ADDON_LOADED has
 -- seeded the module and on an install that predates it.
 function DUI_ReadyCheckWindowEnabled()
     local t = DanUIDB and DanUIDB.ReadyCheckWindow
     return not t or t.enabled ~= false
+end
+
+-- Packs the ticked columns left to right, sizes the window to them, and shrinks or
+-- drops the assignments card to the rows that are on. Every setting on the panel
+-- funnels through here, then repaints whatever is on screen (a preview included).
+local function ApplyLayout()
+    local t = Settings()
+
+    local x, last, prevGroup = COL_X0, nil, nil
+    for _, col in ipairs(COLUMNS) do
+        local on = ColumnOn(col)
+        if on then
+            if prevGroup and col.group ~= prevGroup then x = x + COL_GROUP_GAP end
+            col.x, prevGroup, last = x, col.group, x
+            x = x + COL_STEP
+            col.header:ClearAllPoints(); col.header:SetPoint("LEFT", HeaderBar, "LEFT", col.x, 0)
+        end
+        col.header:SetShown(on)
+    end
+    windowW = math.max(MIN_W, last and (last + 16 + COL_TAIL) or 0)
+    RCFrame:SetWidth(windowW); HeaderBar:SetWidth(windowW - 2)
+
+    -- Visible rows stack from the top of the card, so turning off Soulstone moves
+    -- Source of Magic up rather than leaving a hole above it.
+    local rows = 0
+    for _, entry in ipairs({ { SSRow, t.showSoulstone }, { SoMRow, t.showSourceOfMagic } }) do
+        local row, on = entry[1], entry[2] ~= false
+        row:SetShown(on)
+        if on then
+            local y = -(FOOTER_CAPTION_H + rows * FOOTER_ROW_H)
+            row:ClearAllPoints(); row:SetPoint("TOPLEFT", 10, y); row:SetPoint("TOPRIGHT", -10, y)
+            rows = rows + 1
+        end
+    end
+    Footer:SetShown(rows > 0)
+    if rows > 0 then
+        Footer:SetHeight(FOOTER_CAPTION_H + rows * FOOTER_ROW_H + 4)
+        scrollBottom = FOOTER_PAD + FOOTER_CAPTION_H + rows * FOOTER_ROW_H + 4 + 8
+    else
+        scrollBottom = FOOTER_PAD
+    end
+
+    RCFrame:SetScale(t.scale or 1)
+    layoutGen = layoutGen + 1
+
+    if RCFrame:IsShown() then
+        if previewActive and previewPreset then UpdateRCWindow(BuildPreviewRoster(previewPreset))
+        else UpdateRCWindow() end
+    end
+end
+
+-- Once at load on the defaults, so the columns have an x and the headers an anchor
+-- even before ADDON_LOADED re-runs it on the saved settings.
+ApplyLayout()
+
+local function ApplyPosition()
+    local p = Settings().point
+    RCFrame:ClearAllPoints()
+    if p and p[1] then
+        RCFrame:SetPoint(p[1], UIParent, p[2] or p[1], p[3] or 0, p[4] or 0)
+    else
+        RCFrame:SetPoint("CENTER", 320, 0)
+    end
 end
 
 -- Shared by the floating bar, the minimap button and /duirc.
@@ -899,28 +1036,315 @@ function DUI_ToggleReadyCheckWindow(title)
     UpdateRCWindow()
 end
 
-function DUI_InitReadyCheck()
-    DUI_InitModuleDB("ReadyCheckWindow", DUI_GetReadyCheckWindowDefaults)
+local function IsSecret(v)
+    return issecretvalue and issecretvalue(v)
 end
 
+local NagFrame = CreateFrame("Frame")
+local NagWanted
+
+-- ---- Soulstone nag --------------------------------------------------------
+-- A ready check is the moment the question "has every warlock put a stone out" is
+-- actually being asked, so it is where the ready check window's Soulstone chip can be
+-- pulled without anyone clicking it. RunWarlockNag above does the whispering; this
+-- half only decides whether this client is the one that should be sending anything.
+--
+-- Every client in the group sees READY_CHECK, and a whisper -- unlike a ready check or
+-- a pull timer -- is not deduplicated by the server: ten raiders running DanUI with
+-- this on would send the same warlock ten copies. It used to be settled by letting
+-- only the player who *started* the check nag, which meant a check run by anyone
+-- without DanUI (or with it off) whispered nobody.
+--
+-- Now every DanUI client with the setting on claims the job over an addon message the
+-- moment the check goes out, and when the 2s delay below is up each one runs the same
+-- election over the same claims: the initiator wins if they claimed, otherwise the
+-- lowest Name-Realm. Every client reaches the same answer without a reply round, so
+-- there is still exactly one sender.
+local lastNag = 0
+local NAG_COOLDOWN = 60
+local NAG_DELAY = 2
+local NAG_PREFIX = "DanUI"
+local NAG_MSG = "NAG1:"      -- versioned so a later format can't be misread as this one
+local CLAIM_WINDOW = 6       -- a claim older than this belongs to a previous ready check
+
+local claims = {}            -- Name-Realm -> { t = GetTime(), init = bool }
+
+-- CHAT_MSG_ADDON is heard only while an election is open. It fires for every
+-- registered prefix of every addon in the group -- BigWigs/DBM syncs, Details!,
+-- WeakAuras, MRT -- so leaving it on for the module's lifetime woke the handler
+-- constantly through a raid night to read a claim that only matters for the ~2s
+-- after a ready check. Opened on READY_CHECK, before this client sends its own
+-- claim: the others send theirs only after *their* READY_CHECK, which the server
+-- broadcast to us first, so a claim cannot beat the registration here.
+-- The generation counter keeps an older election's timer from closing a newer one.
+local electionGen = 0
+
+local function OpenElection()
+    electionGen = electionGen + 1
+    NagFrame:RegisterEvent("CHAT_MSG_ADDON")
+    return electionGen
+end
+
+local function CloseElection(gen)
+    if gen ~= electionGen then return end
+    NagFrame:UnregisterEvent("CHAT_MSG_ADDON")
+end
+
+-- A failed register only loses the election's input; the send below notices that and
+-- falls back to the initiator rule, so this is not worth erroring over.
+if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
+    pcall(C_ChatInfo.RegisterAddonMessagePrefix, NAG_PREFIX)
+end
+
+local function StartedByPlayer(initiator)
+    if not initiator then return false end
+    -- READY_CHECK hands back a plain name, and a group member's name is itself a valid
+    -- unit token, so UnitIsUnit resolves that and a raid token alike. It answers nil
+    -- rather than false for a name it can't place, which is what the fallback is for.
+    local ok, isPlayer = pcall(UnitIsUnit, initiator, "player")
+    if ok and isPlayer ~= nil then return isPlayer end
+    return Ambiguate(initiator, "short") == UnitName("player")
+end
+
+-- CHAT_MSG_ADDON names the sender "Name-Realm", but a same-realm name can arrive bare
+-- elsewhere; normalise both sides so the election compares like with like.
+local function FullName(name)
+    if not name or IsSecret(name) then return nil end
+    if not strfind(name, "-", 1, true) then name = name .. "-" .. (GetNormalizedRealmName() or "") end
+    return name
+end
+
+local function MyFullName() return FullName(UnitName("player")) end
+
+-- Instance groups (LFR, a queued dungeon) talk on INSTANCE_CHAT, not RAID/PARTY.
+local function GroupChannel()
+    if IsInGroup(LE_PARTY_CATEGORY_HOME) then return IsInRaid() and "RAID" or "PARTY" end
+    if IsInGroup(LE_PARTY_CATEGORY_INSTANCE) then return "INSTANCE_CHAT" end
+end
+
+-- Older clients returned a boolean; current ones return Enum.SendAddonMessageResult.
+local function SendClaim(init)
+    local channel = GroupChannel()
+    if not channel or not C_ChatInfo or not C_ChatInfo.SendAddonMessage then return false end
+    local ok, res = pcall(C_ChatInfo.SendAddonMessage, NAG_PREFIX, NAG_MSG .. (init and "1" or "0"), channel)
+    if not ok then return false end
+    return res == nil or res == true or res == 0
+end
+
+local function OnClaim(text, sender)
+    if IsSecret(text) or type(text) ~= "string" or strsub(text, 1, #NAG_MSG) ~= NAG_MSG then return end
+    sender = FullName(sender)
+    -- Our own claim is recorded locally when it is sent, so the echo is dropped rather
+    -- than relied on: if it never arrived we would lose an election we had won.
+    if not sender or sender == MyFullName() then return end
+    claims[sender] = { t = GetTime(), init = strsub(text, #NAG_MSG + 1, #NAG_MSG + 1) == "1" }
+end
+
+-- The initiator first, then the lowest name. Deterministic over the same set, which is
+-- the whole point: nobody has to be told they won.
+local function ElectedSender()
+    local now, best, bestInit = GetTime(), nil, false
+    for name, c in pairs(claims) do
+        if now - c.t <= CLAIM_WINDOW then
+            if not best or (c.init and not bestInit) or (c.init == bestInit and name < best) then
+                best, bestInit = name, c.init
+            end
+        end
+    end
+    return best
+end
+
+local function MaybeNagWarlocks(initiator)
+    if not DUI_AutoNagWarlocks or not IsInGroup() then return end
+
+    local gen = OpenElection()
+    local init = StartedByPlayer(initiator)
+    local me = MyFullName()
+    if me then claims[me] = { t = GetTime(), init = init } end
+    -- No working addon channel means no election, and guessing would let every client
+    -- that can't talk whisper at once. Degrade to the old rule: the initiator alone.
+    local commsOk = me and SendClaim(init)
+
+    -- Held a beat rather than run on the event itself: the ready check window paints on
+    -- this same event, a warlock already casting as the check goes out gets to finish,
+    -- any /duirc preview on screen has been replaced by a live scan by the time this
+    -- fires -- and the other clients' claims have had time to arrive.
+    C_Timer.After(NAG_DELAY, function()
+        -- Every claim that counts has arrived by now; ElectedSender reads the table,
+        -- not the event, so the listener can close before the vote is counted.
+        CloseElection(gen)
+        -- Re-checked: the row (or the setting) can be switched off inside the delay.
+        if not NagWanted() then return end
+        if commsOk then
+            if ElectedSender() ~= me then return end
+        elseif not init then
+            return
+        end
+
+        -- A second ready check right after the first ("are we ready *now*") is normal,
+        -- and whispering the same warlock again twenty seconds later reads as nagging
+        -- rather than reminding. Applied only by the elected sender, and after the
+        -- election rather than before the claim: a throttled client that dropped out of
+        -- the running would hand the job to the next name, who would whisper anyway.
+        local now = GetTime()
+        if now - lastNag < NAG_COOLDOWN then return end
+        lastNag = now
+        DUI_AutoNagWarlocks()
+    end)
+end
+
+-- READY_CHECK is held only while the module and the setting are both on, so a
+-- switched-off nag costs nothing - the same rule every other module follows.
+local nagEventsOn = false
+
+NagWanted = function()
+    return DUI_ReadyCheckWindowEnabled() and Settings().autoNagWarlocks and true or false
+end
+
+function DUI_SyncReadyCheckNag()
+    local on = NagWanted()
+    if on == nagEventsOn then return end
+    nagEventsOn = on
+    if on then NagFrame:RegisterEvent("READY_CHECK") else NagFrame:UnregisterEvent("READY_CHECK") end
+end
+
+NagFrame:SetScript("OnEvent", function(_, event, ...)
+    if event == "READY_CHECK" then
+        MaybeNagWarlocks((...))
+    elseif event == "CHAT_MSG_ADDON" then
+        local prefix, text, _, sender = ...
+        if prefix == NAG_PREFIX then OnClaim(text, sender) end
+    end
+end)
+
+function DUI_InitReadyCheck()
+    local t = DanUIDB.ReadyCheckWindow or {}
+    DanUIDB.ReadyCheckWindow = t
+
+    -- The whisper used to be RC & Pull's setting. Carried over once, before the
+    -- defaults backfill could write a `true` over it, and then removed from there.
+    -- Its effective state is what moves: it only ever ran with RC & Pull on, and an
+    -- install that never got the 2026-09-15 default flip (no ...Defaulted flag) gets
+    -- the flip here, as it would have there. Delete once no live DanUIDB still has
+    -- ReadyCheckPullTimer.autoNagWarlocks.
+    local old = DanUIDB.ReadyCheckPullTimer
+    if old and old.autoNagWarlocks ~= nil then
+        if t.autoNagWarlocks == nil then
+            local on = old.autoNagWarlocks
+            if not old.autoNagWarlocksDefaulted then on = true end
+            if old.enabled == false then on = false end
+            t.autoNagWarlocks = on
+        end
+        old.autoNagWarlocks, old.autoNagWarlocksDefaulted = nil, nil
+    end
+
+    DUI_InitModuleDB("ReadyCheckWindow", DUI_GetReadyCheckWindowDefaults)
+    ApplyPosition()
+    ApplyLayout()
+    DUI_SyncReadyCheckNag()
+end
+
+-- /duinag - why did (or didn't) the last ready check whisper anyone. Reports this
+-- module's gates, then hands off to the scan's own dry run. Nothing is ever sent.
+-- `/duinag on|off` flips the setting, quicker than opening the panel.
+SLASH_DUINAG1 = "/duinag"
+SlashCmdList["DUINAG"] = function(msg)
+    local t = DUI_InitModuleDB("ReadyCheckWindow", DUI_GetReadyCheckWindowDefaults)
+    local arg = strlower(strtrim(msg or ""))
+
+    if arg == "on" or arg == "off" then
+        t.autoNagWarlocks = (arg == "on")
+        DUI_SyncReadyCheckNag()
+        if DUI_RCWNagCheck then DUI_RCWNagCheck:SetChecked(t.autoNagWarlocks) end
+        print("|cFF00FF00[DUI]|r Soulstone nag on ready check: " ..
+            (t.autoNagWarlocks and "|cff00FF00on|r" or "|cffFFA500off|r"))
+        return
+    end
+
+    print("|cFF00FF00[DUI]|r Soulstone nag - |cffffffff/duinag on|r or |cffffffff/duinag off|r to switch it.")
+    print("  Ready Check Window module: " .. (t.enabled and "|cff00FF00enabled|r" or "|cffFFA500disabled|r - the nag rides this flag"))
+    print("  Whisper on ready check: " .. (t.autoNagWarlocks and "|cff00FF00on|r" or "|cffFFA500off|r"))
+    print("  In a group: " .. (IsInGroup() and "|cff00FF00yes|r" or "|cffFFA500no|r"))
+    local wait = NAG_COOLDOWN - (GetTime() - lastNag)
+    if lastNag > 0 and wait > 0 then
+        print(string.format("  Throttle: |cffFFA500%ds left|r before another ready check would whisper", math.ceil(wait)))
+    end
+    print("  |cff9a9a9aAny ready check counts. One DanUI client sends: whoever started it if they run DanUI with this on, otherwise the first by name.|r")
+
+    DUI_ReportWarlockNag()
+end
+
+-- ---- Config panel -----------------------------------------------------------
 local rcwConfig = DUI_CreateConfigFrame("DUI_ReadyCheckWindowConfig", "Ready Check Window", 320, 300, "DUI_ReadyCheckWindowBtn")
 
+local function PanelButton(L, text, tip, onClick)
+    local b = CreateFrame("Button", nil, rcwConfig, "BackdropTemplate")
+    b:SetSize(150, 22)
+    L:Place(b)
+    b:SetText(text)
+    StyleAsTealTab(b)
+    DUI_AddTooltip(b, text, tip)
+    b:SetScript("OnClick", onClick)
+    return b
+end
+
+-- Lays a run of column ticks out two-up under the current header.
+local function ColumnTicks(L, db, group)
+    local list = {}
+    for _, col in ipairs(COLUMNS) do if col.group == group then list[#list + 1] = col end end
+    L:Columns(2)
+    for i, col in ipairs(list) do
+        L:Column(((i - 1) % 2) + 1)
+        L:Checkbox(col.name, db, "col_" .. col.key, ApplyLayout,
+            "Shows the " .. col.name .. " column. A hidden column also stops counting towards the missing-buffs sort and the row tooltip.")
+    end
+    L:EndColumns()
+end
+
 function DUI_OpenReadyCheckWindowConfig()
+    local db = DUI_InitModuleDB("ReadyCheckWindow", DUI_GetReadyCheckWindowDefaults)
+
     if not rcwConfig.init then
         local L = DUI_CreateLayout(rcwConfig)
-        L:Header("Ready Check Window")
-        L:Text("The raid inspection window: everyone's ready state, food, flask, rune, vantus and raid buffs, with the Soulstone and repair assignments underneath. It opens on every ready check, and from the floating bar's Inspect button or the minimap button's right-click.")
-        L:Gap()
-        L:Text("Untick this row to stop it opening at all. The Soulstone whisper is part of RC & Pull and keeps working either way.")
 
-        L:Header("Preview")
-        local previewBtn = CreateFrame("Button", nil, rcwConfig, "BackdropTemplate")
-        previewBtn:SetSize(150, 22)
-        L:Place(previewBtn)
-        previewBtn:SetText("Show Preview")
-        StyleAsTealTab(previewBtn)
-        DUI_AddTooltip(previewBtn, "Show Preview", "Opens the window filled with an invented raid, so you can see it without a ready check. /duirc lists the other preview states.")
-        previewBtn:SetScript("OnClick", function() DUI_PreviewReadyCheckWindow("next") end)
+        L:Header("Behavior")
+        L:Checkbox("Open on Ready Check", db, "openOnReadyCheck", nil,
+            { body = "Opens the window when any ready check starts.",
+              note = "Off leaves it to the floating bar's Inspect button, the minimap right-click and /duirc. The Soulstone whisper still runs on ready checks either way." })
+        L:Slider("DUI_RCW_CloseDelay", "Close After Check", 0, 60, 1, db, "closeDelay", nil,
+            { fmt = "%ds", value = db.closeDelay,
+              tooltip = "How long the window stays up once the ready check finishes. 0 leaves it open until you close it." })
+        L:Checkbox("Sort by Missing Buffs", db, "sortByMissing", ApplyLayout,
+            "Puts whoever is missing the most tracked buffs at the top. Off keeps raid order.")
+        L:Slider("DUI_RCW_MaxRows", "Visible Rows", 10, 40, 5, db, "maxRows", ApplyLayout,
+            { fmt = "%d", value = db.maxRows, tooltip = "Rows shown before the list scrolls." })
+        L:Slider("DUI_RCW_Scale", "Window Scale", 0.6, 1.5, 0.05, db, "scale", ApplyLayout,
+            { fmt = "%.2f", value = db.scale, tooltip = "Size of the whole window." })
+
+        L:Header("Consumables")
+        ColumnTicks(L, db, "cons")
+
+        L:Header("Raid Buffs")
+        ColumnTicks(L, db, "raid")
+
+        L:Header("Assignments")
+        L:Checkbox("Soulstone", db, "showSoulstone", ApplyLayout,
+            "The Soulstone row of the card under the roster: how many warlocks have a stone out, and on whom. Its count is the button that whispers the ones who haven't.")
+        L:Checkbox("Source of Magic", db, "showSourceOfMagic", ApplyLayout,
+            "The Source of Magic row: how many evokers have it out, and on whom.")
+        DUI_RCWNagCheck = L:Checkbox("Whisper Unstoned Warlocks", db, "autoNagWarlocks", DUI_SyncReadyCheckNag,
+            { body = "When a ready check starts, whispers every warlock who has not put a Soulstone out yet.",
+              note = "Sends real whispers with no confirmation. Works on anyone's ready check, and with the window closed or the Soulstone row hidden; when several people run DanUI only one of them whispers (whoever started the check, else the first by name). At most once a minute, and stays quiet if Soulstone buffs can't be read at that moment rather than guessing. /duinag reports what it would do without sending anything." })
+
+        L:Header("Window")
+        PanelButton(L, "Show Preview",
+            "Opens the window filled with an invented raid, so you can see your settings without a ready check. Click again for the next state; /duirc lists them.",
+            function() DUI_PreviewReadyCheckWindow("next") end)
+        PanelButton(L, "Reset Position", "Puts the window back where it starts. Drag it by any empty part to move it.",
+            function()
+                db.point = nil
+                ApplyPosition()
+            end)
 
         L:FitHeight()
         rcwConfig.init = true

@@ -32,7 +32,6 @@ function DUI_GetReadyCheckPullTimerDefaults()
         autoPull = true,
         pullDuration = 15,
         minDurability = 80,
-        autoNagWarlocks = true,
         cancelPullOnReadyLoss = true,
     }
 end
@@ -571,157 +570,6 @@ end
 -- so a disabled module is genuinely inert instead of merely quiet.
 local readyCheckEventsOn = false
 
--- ---- Soulstone nag --------------------------------------------------------
--- A ready check is the moment the question "has every warlock put a stone out" is
--- actually being asked, so it is where the ready check window's Soulstone chip can be
--- pulled without anyone clicking it. The whispering lives in ReadyCheck.lua, next to
--- the scan that works out who is still owed one; this half only decides whether this
--- client is the one that should be sending anything.
---
--- Every client in the group sees READY_CHECK, and a whisper -- unlike a ready check or
--- a pull timer -- is not deduplicated by the server: ten raiders running DanUI with
--- this on would send the same warlock ten copies. It used to be settled by letting
--- only the player who *started* the check nag, which meant a check run by anyone
--- without DanUI (or with it off) whispered nobody.
---
--- Now every DanUI client with the setting on claims the job over an addon message the
--- moment the check goes out, and when the 2s delay below is up each one runs the same
--- election over the same claims: the initiator wins if they claimed, otherwise the
--- lowest Name-Realm. Every client reaches the same answer without a reply round, so
--- there is still exactly one sender.
-local lastNag = 0
-local NAG_COOLDOWN = 60
-local NAG_DELAY = 2
-local NAG_PREFIX = "DanUI"
-local NAG_MSG = "NAG1:"      -- versioned so a later format can't be misread as this one
-local CLAIM_WINDOW = 6       -- a claim older than this belongs to a previous ready check
-
-local claims = {}            -- Name-Realm -> { t = GetTime(), init = bool }
-
--- CHAT_MSG_ADDON is heard only while an election is open. It fires for every
--- registered prefix of every addon in the group -- BigWigs/DBM syncs, Details!,
--- WeakAuras, MRT -- so leaving it on for the module's lifetime woke the handler
--- constantly through a raid night to read a claim that only matters for the ~2s
--- after a ready check. Opened on READY_CHECK, before this client sends its own
--- claim: the others send theirs only after *their* READY_CHECK, which the server
--- broadcast to us first, so a claim cannot beat the registration here.
--- The generation counter keeps an older election's timer from closing a newer one.
-local electionGen = 0
-
-local function OpenElection()
-    electionGen = electionGen + 1
-    ReadyFrame:RegisterEvent("CHAT_MSG_ADDON")
-    return electionGen
-end
-
-local function CloseElection(gen)
-    if gen ~= electionGen then return end
-    ReadyFrame:UnregisterEvent("CHAT_MSG_ADDON")
-end
-
--- A failed register only loses the election's input; the send below notices that and
--- falls back to the initiator rule, so this is not worth erroring over.
-if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
-    pcall(C_ChatInfo.RegisterAddonMessagePrefix, NAG_PREFIX)
-end
-
-local function StartedByPlayer(initiator)
-    if not initiator then return false end
-    -- READY_CHECK hands back a plain name, and a group member's name is itself a valid
-    -- unit token, so UnitIsUnit resolves that and a raid token alike. It answers nil
-    -- rather than false for a name it can't place, which is what the fallback is for.
-    local ok, isPlayer = pcall(UnitIsUnit, initiator, "player")
-    if ok and isPlayer ~= nil then return isPlayer end
-    return Ambiguate(initiator, "short") == UnitName("player")
-end
-
--- CHAT_MSG_ADDON names the sender "Name-Realm", but a same-realm name can arrive bare
--- elsewhere; normalise both sides so the election compares like with like.
-local function FullName(name)
-    if not name or IsSecret(name) then return nil end
-    if not strfind(name, "-", 1, true) then name = name .. "-" .. (GetNormalizedRealmName() or "") end
-    return name
-end
-
-local function MyFullName() return FullName(UnitName("player")) end
-
--- Instance groups (LFR, a queued dungeon) talk on INSTANCE_CHAT, not RAID/PARTY.
-local function GroupChannel()
-    if IsInGroup(LE_PARTY_CATEGORY_HOME) then return IsInRaid() and "RAID" or "PARTY" end
-    if IsInGroup(LE_PARTY_CATEGORY_INSTANCE) then return "INSTANCE_CHAT" end
-end
-
--- Older clients returned a boolean; current ones return Enum.SendAddonMessageResult.
-local function SendClaim(init)
-    local channel = GroupChannel()
-    if not channel or not C_ChatInfo or not C_ChatInfo.SendAddonMessage then return false end
-    local ok, res = pcall(C_ChatInfo.SendAddonMessage, NAG_PREFIX, NAG_MSG .. (init and "1" or "0"), channel)
-    if not ok then return false end
-    return res == nil or res == true or res == 0
-end
-
-local function OnClaim(text, sender)
-    if IsSecret(text) or type(text) ~= "string" or strsub(text, 1, #NAG_MSG) ~= NAG_MSG then return end
-    sender = FullName(sender)
-    -- Our own claim is recorded locally when it is sent, so the echo is dropped rather
-    -- than relied on: if it never arrived we would lose an election we had won.
-    if not sender or sender == MyFullName() then return end
-    claims[sender] = { t = GetTime(), init = strsub(text, #NAG_MSG + 1, #NAG_MSG + 1) == "1" }
-end
-
--- The initiator first, then the lowest name. Deterministic over the same set, which is
--- the whole point: nobody has to be told they won.
-local function ElectedSender()
-    local now, best, bestInit = GetTime(), nil, false
-    for name, c in pairs(claims) do
-        if now - c.t <= CLAIM_WINDOW then
-            if not best or (c.init and not bestInit) or (c.init == bestInit and name < best) then
-                best, bestInit = name, c.init
-            end
-        end
-    end
-    return best
-end
-
-local function MaybeNagWarlocks(initiator)
-    if not DUI_AutoNagWarlocks or not IsInGroup() then return end
-
-    local gen = OpenElection()
-    local init = StartedByPlayer(initiator)
-    local me = MyFullName()
-    if me then claims[me] = { t = GetTime(), init = init } end
-    -- No working addon channel means no election, and guessing would let every client
-    -- that can't talk whisper at once. Degrade to the old rule: the initiator alone.
-    local commsOk = me and SendClaim(init)
-
-    -- Held a beat rather than run on the event itself: the ready check window paints on
-    -- this same event, a warlock already casting as the check goes out gets to finish,
-    -- any /duirc preview on screen has been replaced by a live scan by the time this
-    -- fires -- and the other clients' claims have had time to arrive.
-    C_Timer.After(NAG_DELAY, function()
-        -- Every claim that counts has arrived by now; ElectedSender reads the table,
-        -- not the event, so the listener can close before the vote is counted.
-        CloseElection(gen)
-        -- Re-checked: the row (or the setting) can be switched off inside the delay.
-        if not db or not db.enabled or not db.autoNagWarlocks then return end
-        if commsOk then
-            if ElectedSender() ~= me then return end
-        elseif not init then
-            return
-        end
-
-        -- A second ready check right after the first ("are we ready *now*") is normal,
-        -- and whispering the same warlock again twenty seconds later reads as nagging
-        -- rather than reminding. Applied only by the elected sender, and after the
-        -- election rather than before the claim: a throttled client that dropped out of
-        -- the running would hand the job to the next name, who would whisper anyway.
-        local now = GetTime()
-        if now - lastNag < NAG_COOLDOWN then return end
-        lastNag = now
-        DUI_AutoNagWarlocks()
-    end)
-end
-
 local function SetReadyCheckEventsRegistered(on)
     on = on and true or false
     if on == readyCheckEventsOn then return end
@@ -735,7 +583,6 @@ local function SetReadyCheckEventsRegistered(on)
         ReadyFrame:RegisterEvent("CANCEL_PLAYER_COUNTDOWN")
         -- Combat means the pull happened; a prompt still up is in the way.
         ReadyFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
-        -- CHAT_MSG_ADDON is not here: it is opened per election (see OpenElection).
     else
         ReadyFrame:UnregisterAllEvents()
         SetPullWatch(false)
@@ -771,8 +618,6 @@ ReadyFrame:SetScript("OnEvent", function(self, event, ...)
         -- Blizzard's prompt is only hidden when ours actually took its place; in
         -- combat it stays, so the check can still be answered.
         if ShowOverlay() and ReadyCheckFrame then ReadyCheckFrame:Hide() end
-
-        if db.autoNagWarlocks then MaybeNagWarlocks(initiator) end
 
     elseif event == "READY_CHECK_FINISHED" then
         HideOverlay()
@@ -829,26 +674,11 @@ ReadyFrame:SetScript("OnEvent", function(self, event, ...)
         if ReadyCheckFrame and ReadyCheckFrame:IsShown() then ReadyCheckFrame:Hide() end
         -- The pull happened; a death from here on is the fight, not a reason to cancel.
         SetPullWatch(false)
-
-    elseif event == "CHAT_MSG_ADDON" then
-        local prefix, text, _, sender = ...
-        if prefix == NAG_PREFIX then OnClaim(text, sender) end
     end
 end)
 
 function DUI_InitReadyCheckPullTimer()
     db = DUI_InitModuleDB("ReadyCheckPullTimer", DUI_GetReadyCheckPullTimerDefaults)
-
-    -- autoNagWarlocks shipped off for one build on 2026-09-15 and the reload that
-    -- picked up the default flip persists that false *before* the new default is read,
-    -- so DUI_InitModuleDB's nil-only backfill would never reach an install that had
-    -- seen the first version. One-shot, and safe only because the off state it
-    -- overwrites was never chosen by anyone -- the setting was hours old.
-    -- Delete this block once no live DanUIDB is missing autoNagWarlocksDefaulted.
-    if not db.autoNagWarlocksDefaulted then
-        db.autoNagWarlocksDefaulted = true
-        db.autoNagWarlocks = true
-    end
 
     -- CHAT_MSG_SYSTEM used to be registered here with no branch to handle it, so
     -- every system message in the game woke this handler for nothing.
@@ -923,35 +753,6 @@ end
 SLASH_DUIRCTEST1 = "/duirctest"
 SlashCmdList["DUIRCTEST"] = DUI_PreviewReadyCheck
 
--- /duinag - why did (or didn't) the last ready check whisper anyone. Reports this
--- file's gates, then hands off to the scan's own dry run. Nothing is ever sent.
--- `/duinag on|off` flips the setting, which is quicker than opening the panel and is
--- the way out if a stale off ever survives the migration in DUI_InitReadyCheckPullTimer.
-SLASH_DUINAG1 = "/duinag"
-SlashCmdList["DUINAG"] = function(msg)
-    db = db or DUI_InitModuleDB("ReadyCheckPullTimer", DUI_GetReadyCheckPullTimerDefaults)
-    local arg = strlower(strtrim(msg or ""))
-
-    if arg == "on" or arg == "off" then
-        db.autoNagWarlocks = (arg == "on")
-        print("|cFF00FF00[DUI]|r Soulstone nag on ready check: " ..
-            (db.autoNagWarlocks and "|cff00FF00on|r" or "|cffFFA500off|r"))
-        return
-    end
-
-    print("|cFF00FF00[DUI]|r Soulstone nag - |cffffffff/duinag on|r or |cffffffff/duinag off|r to switch it.")
-    print("  RC & Pull module: " .. (db.enabled and "|cff00FF00enabled|r" or "|cffFFA500disabled|r - the nag rides this flag"))
-    print("  Whisper on ready check: " .. (db.autoNagWarlocks and "|cff00FF00on|r" or "|cffFFA500off|r"))
-    print("  In a group: " .. (IsInGroup() and "|cff00FF00yes|r" or "|cffFFA500no|r"))
-    local wait = NAG_COOLDOWN - (GetTime() - lastNag)
-    if lastNag > 0 and wait > 0 then
-        print(string.format("  Throttle: |cffFFA500%ds left|r before another ready check would whisper", math.ceil(wait)))
-    end
-    print("  |cff9a9a9aAny ready check counts. One DanUI client sends: whoever started it if they run DanUI with this on, otherwise the first by name.|r")
-
-    if DUI_ReportWarlockNag then DUI_ReportWarlockNag() end
-end
-
 local config = DUI_CreateConfigFrame("DUI_RCPTConfig", "Ready Check & Pull", 320, 250, "DUI_RCPTBtn")
 
 function DUI_OpenReadyCheckPullTimerConfig()
@@ -968,10 +769,7 @@ function DUI_OpenReadyCheckPullTimerConfig()
             { body = "Cancels the pull timer (/pull 0) when someone who answered Ready dies or goes offline before it ends.",
               note = "Covers any pull started during or within a minute of a ready check, auto or by hand. Needs lead or assist. Cancels at most once per ready check, so a pull you resend with that player still down goes ahead." })
 
-        L:Checkbox("Whisper Unstoned Warlocks", db, "autoNagWarlocks", nil,
-            { body = "When a ready check starts, whispers every warlock who has not put a Soulstone out yet.",
-              note = "Sends real whispers with no confirmation. Works on anyone's ready check; when several people run DanUI only one of them whispers (whoever started the check, else the first by name). At most once a minute, and stays quiet if Soulstone buffs can't be read at that moment rather than guessing. Works in raid instances - it reads the same data as the Soulstone column on the ready check window. /duinag reports what it would do without sending anything." })
-
+        -- The Soulstone whisper moved to the Ready Check Window module on 2026-10-01.
         L:Slider("DUI_RCPT_Duration", "Pull Duration", 5, 30, 1, db, "pullDuration", nil,
             { fmt = "%ds", value = db.pullDuration, tooltip = "Length of the pull timer started by Auto Pull." })
 
