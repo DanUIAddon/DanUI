@@ -1737,8 +1737,7 @@ end
 SlashCmdList["DUIRC"] = function(msg)
     local arg = strtrim(msg or "")
     if arg ~= "" and DUI_PreviewReadyCheckWindow then return DUI_PreviewReadyCheckWindow(arg) end
-    if DUI_ReadyCheckFrame and DUI_ReadyCheckFrame:IsShown() then DUI_ReadyCheckFrame:Hide()
-    elseif DUI_ReadyCheckFrame then DUI_ReadyCheckFrame:Show(); UpdateRCWindow() end
+    if DUI_ToggleReadyCheckWindow then DUI_ToggleReadyCheckWindow("Ready Check") end
 end
 MainFrame:Hide()
 
@@ -1948,6 +1947,8 @@ EventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
         end
         if DUI_InitBreakTimer then DUI_InitBreakTimer() end
 
+        if DUI_InitReadyCheck then DUI_InitReadyCheck() end
+
         -- ReadyCheckPullTimer Defaults
         if DUI_InitReadyCheckPullTimer then
             DUI_InitReadyCheckPullTimer()
@@ -2017,7 +2018,7 @@ EventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
     elseif event == "GROUP_ROSTER_UPDATE" then
         if not rosterTimer then rosterTimer = C_Timer.NewTimer(0.2, FlushRosterUpdate) end
     elseif event == "READY_CHECK" then
-        if not InCombatLockdown() then
+        if not InCombatLockdown() and DUI_ReadyCheckWindowEnabled and DUI_ReadyCheckWindowEnabled() then
             rcAuraWatcher:SetRegistered(true)
             local timeLeft = 35; if DUI_ReadyCheckFrame then DUI_ReadyCheckFrame.Title:SetText("Ready Check: 35s"); DUI_ReadyCheckFrame:Show(); UpdateRCWindow() end
             if RC_Ticker then RC_Ticker:Cancel() end
@@ -2027,6 +2028,17 @@ EventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
     elseif event == "READY_CHECK_FINISHED" then rcAuraWatcher:SetRegistered(false); if RC_Ticker then RC_Ticker:Cancel() end; C_Timer.After(10, function() if not InCombatLockdown() and DUI_ReadyCheckFrame then DUI_ReadyCheckFrame:Hide() end end)
     end
 end)
+
+-- Rail hook for the Ready Check Window row (the module lives in ReadyCheck.lua).
+-- Defined here because the countdown ticker and the aura watcher are this file's
+-- locals. Turning it off mid-check takes the window down and stops both; turning it
+-- on mid-check does not reopen it - the next ready check will.
+function DUI_ReadyCheckWindowApplyEnabled(on)
+    if on then return end
+    if RC_Ticker then RC_Ticker:Cancel() end
+    rcAuraWatcher:SetRegistered(false)
+    if DUI_ReadyCheckFrame then DUI_ReadyCheckFrame:Hide() end
+end
 
 
 
@@ -2074,6 +2086,7 @@ local DUI_MODULE_GROUPS = {
         { text = "Raid Automation",    frame = "DUI_RaidAutomationConfig",    open = "DUI_OpenRaidAutomationConfig",      dbKey = "RaidAutomation",      apply = "DUI_RaidAutomationApplyEnabled" },
         { text = "Raid Arranger",      frame = "DUI_GroupsPopout",                                                        dbKey = "RaidArranger",        apply = "DUI_RaidArrangerApplyEnabled" },
         { text = "Auto-Assist List",   frame = "DUI_AssistConfig",            open = "DUI_OpenAssistConfig",              dbKey = "AssistModule",        apply = "DUI_AssistApplyEnabled" },
+        { text = "Ready Check Window", frame = "DUI_ReadyCheckWindowConfig",  open = "DUI_OpenReadyCheckWindowConfig",    dbKey = "ReadyCheckWindow",    apply = "DUI_ReadyCheckWindowApplyEnabled" },
         { text = "RC & Pull",          frame = "DUI_RCPTConfig",              open = "DUI_OpenReadyCheckPullTimerConfig", dbKey = "ReadyCheckPullTimer", apply = "DUI_ReadyCheckPullTimerApplyEnabled" },
         { text = "Break Timer",        frame = "DUI_BreakTimerConfig",        open = "DUI_OpenBreakTimerConfig",          dbKey = "BreakTimer",          apply = "DUI_BreakTimerApplyEnabled" },
         { text = "BigWigs & Timeline", frame = "DUI_TimelineConfig",          open = "DUI_OpenTimelineConfig",            dbKey = "Timeline",            apply = "DUI_TimelineApplyEnabled" },

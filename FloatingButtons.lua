@@ -438,13 +438,7 @@ function DUI_InitFloatingButtons()
     inspectIcon:SetVertexColor(0.95, 0.95, 0.95)
 
     InspectBtn:SetScript("OnClick", function()
-        if DUI_ReadyCheckFrame and DUI_ReadyCheckFrame:IsShown() then
-            DUI_ReadyCheckFrame:Hide()
-        elseif DUI_ReadyCheckFrame then
-            DUI_ReadyCheckFrame.Title:SetText("Raid Inspection")
-            DUI_ReadyCheckFrame:Show()
-            if UpdateRCWindow then UpdateRCWindow() end
-        end
+        if DUI_ToggleReadyCheckWindow then DUI_ToggleReadyCheckWindow("Raid Inspection") end
     end)
 
     BreakBtn = CreateFrame("Button", "DUI_BreakButton", FloatingBar, "BackdropTemplate")

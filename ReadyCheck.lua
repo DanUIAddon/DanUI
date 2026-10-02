@@ -855,10 +855,6 @@ function DUI_PreviewReadyCheckWindow(arg)
     print(string.format("|cFF00FF00[DUI]|r Preview: |cffffffff%s|r (%s). A real ready check replaces it; /duirc off to close.", name, preset.desc))
 end
 
-function DUI_InitReadyCheck()
-    -- Window setup already handled in local scope, this just ensures visibility if needed
-end
-
 function DUI_ShowReadyCheckWindow(timeLeft)
     DUI_ReadyCheckFrame.Title:SetText("Ready Check: " .. timeLeft .. "s")
     DUI_ReadyCheckFrame:Show()
@@ -867,4 +863,67 @@ end
 
 function DUI_HideReadyCheckWindow()
     DUI_ReadyCheckFrame:Hide()
+end
+-- ===========================================================================
+-- Module: the window as its own rail row ("Ready Check Window", RAID group).
+--
+-- Off means the window never opens: not on a ready check, and not from the floating
+-- bar's Inspect button, the minimap right-click or a bare /duirc either (the rail's
+-- rule for on-demand buttons). Those say so in chat rather than doing nothing.
+-- /duirc <state> previews still open it - that is a test tool, asked for by name.
+--
+-- Only the window is switched. The Soulstone nag also reads ScanUnit from this file,
+-- but it belongs to RC & Pull and rides that module's switch.
+-- ===========================================================================
+
+function DUI_GetReadyCheckWindowDefaults()
+    return { enabled = true }
+end
+
+-- A missing table reads as on, so the window keeps working before ADDON_LOADED has
+-- seeded the module and on an install that predates it.
+function DUI_ReadyCheckWindowEnabled()
+    local t = DanUIDB and DanUIDB.ReadyCheckWindow
+    return not t or t.enabled ~= false
+end
+
+-- Shared by the floating bar, the minimap button and /duirc.
+function DUI_ToggleReadyCheckWindow(title)
+    if RCFrame:IsShown() then RCFrame:Hide(); return end
+    if not DUI_ReadyCheckWindowEnabled() then
+        print("|cFF00FF00[DUI]|r The ready check window is turned off (Ready Check Window, in /dan).")
+        return
+    end
+    RCFrame.Title:SetText(title or "Raid Inspection")
+    RCFrame:Show()
+    UpdateRCWindow()
+end
+
+function DUI_InitReadyCheck()
+    DUI_InitModuleDB("ReadyCheckWindow", DUI_GetReadyCheckWindowDefaults)
+end
+
+local rcwConfig = DUI_CreateConfigFrame("DUI_ReadyCheckWindowConfig", "Ready Check Window", 320, 300, "DUI_ReadyCheckWindowBtn")
+
+function DUI_OpenReadyCheckWindowConfig()
+    if not rcwConfig.init then
+        local L = DUI_CreateLayout(rcwConfig)
+        L:Header("Ready Check Window")
+        L:Text("The raid inspection window: everyone's ready state, food, flask, rune, vantus and raid buffs, with the Soulstone and repair assignments underneath. It opens on every ready check, and from the floating bar's Inspect button or the minimap button's right-click.")
+        L:Gap()
+        L:Text("Untick this row to stop it opening at all. The Soulstone whisper is part of RC & Pull and keeps working either way.")
+
+        L:Header("Preview")
+        local previewBtn = CreateFrame("Button", nil, rcwConfig, "BackdropTemplate")
+        previewBtn:SetSize(150, 22)
+        L:Place(previewBtn)
+        previewBtn:SetText("Show Preview")
+        StyleAsTealTab(previewBtn)
+        DUI_AddTooltip(previewBtn, "Show Preview", "Opens the window filled with an invented raid, so you can see it without a ready check. /duirc lists the other preview states.")
+        previewBtn:SetScript("OnClick", function() DUI_PreviewReadyCheckWindow("next") end)
+
+        L:FitHeight()
+        rcwConfig.init = true
+    end
+    rcwConfig:Show()
 end

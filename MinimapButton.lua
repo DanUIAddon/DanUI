@@ -31,12 +31,7 @@ function DUI_InitMinimapButton()
     btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     btn:SetScript("OnClick", function(_, button)
         if button == "RightButton" then
-            if DUI_ReadyCheckFrame and DUI_ReadyCheckFrame:IsShown() then
-                DUI_ReadyCheckFrame:Hide()
-            elseif DUI_ReadyCheckFrame then
-                DUI_ReadyCheckFrame:Show()
-                if UpdateRCWindow then UpdateRCWindow() end
-            end
+            if DUI_ToggleReadyCheckWindow then DUI_ToggleReadyCheckWindow("Raid Inspection") end
         else
             if DUI_MainFrame:IsShown() then DUI_MainFrame:Hide() else DUI_MainFrame:Show() end
             if UpdateFloatingBar then UpdateFloatingBar() end
