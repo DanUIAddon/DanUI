@@ -1934,6 +1934,7 @@ EventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
         -- their init, because both also fold an older saved table into it first.
         if DUI_InitWarbankGold then DUI_InitWarbankGold() end
         if DUI_InitGuildBankRestock then DUI_InitGuildBankRestock() end
+        if DUI_InitCraftPlanner then DUI_InitCraftPlanner() end
 
         -- Timeline (also owns the BigWigs bar-visibility settings)
         if DUI_GetTimelineDefaults then
@@ -1953,6 +1954,9 @@ EventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
         if DUI_InitReadyCheckPullTimer then
             DUI_InitReadyCheckPullTimer()
         end
+
+        -- Ula'tek wave-call sounds. Seeds its own module DB inside its init.
+        if DUI_InitUlatek then DUI_InitUlatek() end
 
         if DUI_InitFloatingButtons then DUI_InitFloatingButtons() end
         if DUI_InitRaidToolsModule then DUI_InitRaidToolsModule() end
@@ -2000,6 +2004,8 @@ EventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
         if DUI_RefreshAssistList then DUI_RefreshAssistList() end
         if UpdateFloatingBar then UpdateFloatingBar() end
         if DUI_InitMinimapButton then DUI_InitMinimapButton() end
+        -- Last, after every init and migration above has had its say.
+        if DUI_EnforceModulesOff then DUI_EnforceModulesOff() end
         DUI_SyncUIEnableChecks()
     elseif event == "PLAYER_REGEN_DISABLED" then
         if MainFrame:IsShown() then MainFrame:Hide() end
@@ -2099,9 +2105,10 @@ local DUI_MODULE_GROUPS = {
         { text = "RC & Pull",          frame = "DUI_RCPTConfig",              open = "DUI_OpenReadyCheckPullTimerConfig", dbKey = "ReadyCheckPullTimer", apply = "DUI_ReadyCheckPullTimerApplyEnabled" },
         { text = "Break Timer",        frame = "DUI_BreakTimerConfig",        open = "DUI_OpenBreakTimerConfig",          dbKey = "BreakTimer",          apply = "DUI_BreakTimerApplyEnabled" },
         { text = "BigWigs & Timeline", frame = "DUI_TimelineConfig",          open = "DUI_OpenTimelineConfig",            dbKey = "Timeline",            apply = "DUI_TimelineApplyEnabled" },
+        { text = "Ula'tek",            frame = "DUI_UlatekConfig",            open = "DUI_OpenUlatekConfig",              dbKey = "Ulatek",              apply = "DUI_UlatekApplyEnabled" },
     }},
     { name = "COMBAT", modules = {
-        { text = "Castbar",            frame = "DUI_CastbarConfig",           open = "DUI_OpenCastbarConfig",             dbKey = "Castbar",             apply = "DUI_OnCastbarChanged" },
+        { text = "Castbar",            frame = "DUI_CastbarConfig",           open = "DUI_OpenCastbarConfig",             dbKey = "Castbar",             apply = "DUI_OnCastbarChanged", perProfile = true },
         { text = "Combat Timer",       frame = "DUI_CombatTimeConfig",        open = "DUI_OpenCombatTimeConfig",          dbKey = "CombatTime",          apply = "DUI_UpdateCombatTimeAppearance" },
         { text = "Combat Alerts",      frame = "DUI_CombatAlertsConfig",      open = "DUI_OpenCombatAlertsConfig",        dbKey = "CombatAlerts",        apply = "DUI_InitCombatAlerts" },
         { text = "HP Reminder",        frame = "DUI_LowHealthReminderConfig", open = "DUI_OpenLowHealthReminderConfig",   dbKey = "LowHealthReminder",   apply = "DUI_UpdateLowHealthReminderAppearance" },
@@ -2118,6 +2125,7 @@ local DUI_MODULE_GROUPS = {
         { text = "Guild Bank Sorter",  frame = "DUI_GuildBankSortConfig",     open = "DUI_OpenGuildBankSortConfig",       dbKey = "GuildBankSort",       apply = "DUI_GuildBankSortApplyEnabled" },
         { text = "AutoPayout",         frame = "DUI_AutoPayoutConfig",        open = "DUI_OpenAutoPayoutConfig",          dbKey = "AutoPayout",          apply = "DUI_AutoPayoutApplyEnabled" },
         { text = "Guild Bank Restock", frame = "DUI_GuildBankRestockConfig",  open = "DUI_OpenGuildBankRestockConfig",    dbKey = "GuildBankRestock",    apply = "DUI_GuildBankRestockApplyEnabled" },
+        { text = "Craft Planner",      frame = "DUI_CraftPlannerConfig",      open = "DUI_OpenCraftPlannerConfig",        dbKey = "CraftPlanner",        apply = "DUI_CraftPlannerApplyEnabled" },
         { text = "Warbank Gold",       frame = "DUI_WarbankGoldConfig",       open = "DUI_OpenWarbankGoldConfig",         dbKey = "WarbankGold",         apply = "DUI_WarbankGoldApplyEnabled" },
         { text = "Automation",         frame = "DUI_AutomationConfig",        open = "DUI_OpenAutomationConfig",          dbKey = "Automation",          apply = "DUI_AutomationApplyEnabled" },
     }},
@@ -2151,6 +2159,70 @@ local function SetModuleEnabled(spec, value)
     return true
 end
 
+-- ---- "off stays off" across updates ---------------------------------------
+-- Saved variables live in WTF\, so an update (GitHub zip, WowUp, CurseBreaker)
+-- never touches them, and DUI_InitModuleDB only fills nil keys. What *can* turn a
+-- switched-off module back on is a later version's own code: a migration that
+-- rebuilds a table, a renamed key, a forced default flip. This is the net under
+-- all of those. DanUIDB.ModulesOff records which rows were off at the end of the
+-- last session; after every module has initialised, any of them that came back
+-- on is switched off again through the normal rail path, and says so in chat.
+--
+-- It only ever enforces *off*. A version that deliberately needs to turn a
+-- module back on for people who had it off must clear that row's entry here.
+-- Entries are keyed "dbKey.field": a release that renames a module's dbKey has
+-- to move its entry too, or the guard loses track of it.
+--
+-- Castbar is exempt: its flag lives in a castbar profile, and the active profile
+-- is per character, so one account-wide record would leak one character's
+-- castbar choice onto another. The profile already persists it.
+
+local function ModuleStateKey(spec)
+    return spec.dbKey .. "." .. (spec.field or "enabled")
+end
+
+-- Written at logout rather than at each rail click so that every writer of a
+-- flag is covered - a module's own setter, a slash command, a migration - not
+-- just the rail. Entries for rows whose table doesn't exist this session (a
+-- held-back module missing from a release build) are kept, not dropped.
+local function RecordModulesOff()
+    if not DanUIDB then return end
+    local off = DanUIDB.ModulesOff or {}
+    DanUIDB.ModulesOff = off
+    for _, group in ipairs(DUI_MODULE_GROUPS) do
+        for _, spec in ipairs(group.modules) do
+            if not spec.perProfile then
+                local on = IsModuleEnabled(spec)
+                if on ~= nil then off[ModuleStateKey(spec)] = (not on) or nil end
+            end
+        end
+    end
+end
+
+-- Called at the end of ADDON_LOADED, once every module has seeded and migrated
+-- its table. The first session with no record yet just takes a snapshot.
+function DUI_EnforceModulesOff()
+    if not DanUIDB then return end
+    local off = DanUIDB.ModulesOff
+    if type(off) ~= "table" then RecordModulesOff(); return end
+    for _, group in ipairs(DUI_MODULE_GROUPS) do
+        for _, spec in ipairs(group.modules) do
+            if not spec.perProfile and off[ModuleStateKey(spec)]
+               and IsModuleEnabled(spec) then
+                SetModuleEnabled(spec, false)
+                print(DUI_AccentText("DanUI") .. ": kept " .. spec.text
+                    .. " switched off (this version had turned it back on).")
+            end
+        end
+    end
+end
+
+do
+    local f = CreateFrame("Frame")
+    f:RegisterEvent("PLAYER_LOGOUT") -- also fires on /reload
+    f:SetScript("OnEvent", RecordModulesOff)
+end
+
 -- ---- docking ------------------------------------------------------------
 
 -- True while a panel is being docked, so the config factory's OnShow hook does
@@ -2178,6 +2250,7 @@ function DUI_UndockPanel()
     if s then
         f:SetFrameStrata(s.strata)
         f:SetMovable(s.movable)
+        f:SetClampedToScreen(s.clamped)
         if s.bg and f.GetBackdrop and f:GetBackdrop() then
             f:SetBackdropColor(unpack(s.bg))
             f:SetBackdropBorderColor(unpack(s.border))
@@ -2229,7 +2302,7 @@ function DUI_DockPanel(targetFrame, openFunc)
     end
     if not f:IsShown() then f:Show() end
 
-    dockedRestore = { strata = f:GetFrameStrata(), movable = f:IsMovable() }
+    dockedRestore = { strata = f:GetFrameStrata(), movable = f:IsMovable(), clamped = f:IsClampedToScreen() }
     if f.GetBackdrop and f:GetBackdrop() then
         dockedRestore.bg     = { f:GetBackdropColor() }
         dockedRestore.border = { f:GetBackdropBorderColor() }
@@ -2247,6 +2320,12 @@ function DUI_DockPanel(targetFrame, openFunc)
     f:SetFrameStrata(MainFrame:GetFrameStrata())
     f:SetFrameLevel(MainFrame:GetFrameLevel() + 5)
     f:SetMovable(false)
+    -- Panels are clamped for floating use. Docked, a panel taller than the pane
+    -- runs far below the window, unseen under the scroll clip, and the clamp
+    -- shoves the whole thing up whenever that hidden part would leave the screen:
+    -- the panel slid up and down as the window was dragged, with the scrollbar
+    -- still at the top (Craft Planner, the tallest, reported 2026-10-06).
+    f:SetClampedToScreen(false)
     -- The pane supplies the fill; a second border inside it reads as a window
     -- inside a window.
     if f.GetBackdrop and f:GetBackdrop() then

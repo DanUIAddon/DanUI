@@ -5,7 +5,7 @@
 ## X-License: GPL-3.0-or-later
 ## SavedVariables: DanUIDB
 ## SavedVariablesPerCharacter: DanUICharDB
-## OptionalDeps: BigWigs, PremadeRegions, RaiderIO
+## OptionalDeps: BigWigs, PremadeRegions, RaiderIO, Auctionator
 
 # X-Flavor is read by LFGFilter/Init.lua (vendored Premade Groups Filter) to
 # pick its client-specific code paths.
@@ -54,9 +54,11 @@ Timeline.lua
 #@end-do-not-package@
 BreakTimer.lua
 ReadyCheckPullTimer.lua
+Ulatek.lua
 GuildBankSort.lua
 WarbankGold.lua
 GuildBankRestock.lua
+CraftPlanner.lua
 BagItemLevel.lua
 
 # AutoPayout (ported from Oppzippy's Auto Payout, reskinned for DUI)

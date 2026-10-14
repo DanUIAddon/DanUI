@@ -109,6 +109,11 @@ local sounds = {
     { "|cFF9CAF88mindcontroltts|r",     "mindcontroltts.mp3" },
     { "|cFF9CAF88getinlegsweeptts|r",   "getinlegsweeptts.mp3" },
     { "|cFFFFFF00kalimbaping|r",        "kalimbaping.mp3" },
+    { "|cFF9CAF88dodgewavestts|r",      "dodgewavestts.mp3" },
+    { "|cFFFFFF00egg|r",                "egg.mp3" },
+    { "|cFF9CAF88getinbubbletts|r",     "getinbubbletts.mp3" },
+    { "|cFF9CAF88goleftdodgewavestts|r","goleftdodgewavestts.mp3" },
+    { "|cFF9CAF88gorightdodgewavestts|r","gorightdodgewavestts.mp3" },
 }
 
 for _, entry in ipairs(sounds) do

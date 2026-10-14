@@ -52,7 +52,6 @@ function DUI_GetReadyCheckWindowDefaults()
         enabled = true,
         openOnReadyCheck = true,
         closeDelay = 10,
-        sortByMissing = true,
         maxRows = 20,
         scale = 1,
         showSoulstone = true,
@@ -123,7 +122,6 @@ for _, col in ipairs(COLUMNS) do col.header = CreateHeader(col.label, 0) end
 -- throttled refresh), but ScanUnit is defined further down next to the display code
 -- that also uses it.
 local ScanUnit
-local CountMissing
 
 -- The window sits in the "TOOLTIP" strata, so a plain GameTooltip renders behind its
 -- cells/text. Anchor it, then lift its frame level above the window so it shows on top.
@@ -603,17 +601,6 @@ end
 -- what a ready check runs.
 local function ProbeReadable(v) return v == v end
 
--- Only the columns on screen count: the sort and the row tooltip are about what the
--- user chose to track, and an untracked buff shouldn't push someone to the top.
--- The scan itself still reads every buff - the cost is in the aura walk, not here.
-CountMissing = function(found)
-    local missing = 0
-    for _, col in ipairs(COLUMNS) do
-        if ColumnOn(col) and not found[col.key] then missing = missing + 1 end
-    end
-    return missing
-end
-
 -- Which warlock/evoker a buff belongs to. Both Soulstone and Source of Magic sit on
 -- the *recipient*, so the only way to tell who still owes one is the aura's caster.
 -- sourceUnit is nil once the caster leaves the group or drops out of range, and the
@@ -670,7 +657,6 @@ function ScanUnit(i, numMembers)
     data.hasSS, data.hasSoM = hasSS, hasSoM
     data.aurasRead = aurasRead
     data.ssCaster, data.somCaster = ResolveCaster(ssSource), ResolveCaster(somSource)
-    data.missing = CountMissing(found)
     return data
 end
 
@@ -763,18 +749,13 @@ function UpdateRCWindow(datas)
         ScrollBar:SetValue(0); ScrollFrame:SetPoint("BOTTOMRIGHT", -2, scrollBottom); ScrollContent:SetWidth(windowW - 4)
     end
 
-    -- Scan everyone, then sort missing-buffs-to-top (raid order breaks ties) so the
-    -- people who still need attention sit at the top of the list.
+    -- Raid order. It used to sort missing-buffs-to-top, removed on 2026-10-01 by
+    -- request: rows that moved as buffs landed were harder to follow than a fixed list.
     if not datas then
         previewActive = false
         datas = {}
         for i = 1, numMembers do datas[i] = ScanUnit(i, numMembers) end
     end
-    local byMissing = Settings().sortByMissing
-    table.sort(datas, function(a, b)
-        if byMissing and a.missing ~= b.missing then return a.missing > b.missing end
-        return a.index < b.index
-    end)
 
     local readyCount = 0
     for pos = 1, numMembers do
@@ -878,12 +859,11 @@ local function BuildPreviewRoster(preset)
             local found = {}
             for _, col in ipairs(COLUMNS) do found[col.key] = col.icon end
             for _, key in ipairs(m.gaps or {}) do found[key] = nil end
-            local missing = CountMissing(found)
 
             local data = {
                 index = #datas + 1, unit = "player", name = m.name, fullName = m.name,
                 class = m.class, role = m.role, status = m.status,
-                found = found, missing = missing, hasSS = false, hasSoM = false,
+                found = found, hasSS = false, hasSoM = false,
             }
             datas[#datas + 1] = data
             byName[m.name] = data
@@ -1238,6 +1218,7 @@ function DUI_InitReadyCheck()
         old.autoNagWarlocks, old.autoNagWarlocksDefaulted = nil, nil
     end
 
+    t.sortByMissing = nil -- the setting was removed the day it shipped
     DUI_InitModuleDB("ReadyCheckWindow", DUI_GetReadyCheckWindowDefaults)
     ApplyPosition()
     ApplyLayout()
@@ -1296,7 +1277,7 @@ local function ColumnTicks(L, db, group)
     for i, col in ipairs(list) do
         L:Column(((i - 1) % 2) + 1)
         L:Checkbox(col.name, db, "col_" .. col.key, ApplyLayout,
-            "Shows the " .. col.name .. " column. A hidden column also stops counting towards the missing-buffs sort and the row tooltip.")
+            "Shows the " .. col.name .. " column. A hidden column is also left out of the row tooltip's missing list.")
     end
     L:EndColumns()
 end
@@ -1314,8 +1295,6 @@ function DUI_OpenReadyCheckWindowConfig()
         L:Slider("DUI_RCW_CloseDelay", "Close After Check", 0, 60, 1, db, "closeDelay", nil,
             { fmt = "%ds", value = db.closeDelay,
               tooltip = "How long the window stays up once the ready check finishes. 0 leaves it open until you close it." })
-        L:Checkbox("Sort by Missing Buffs", db, "sortByMissing", ApplyLayout,
-            "Puts whoever is missing the most tracked buffs at the top. Off keeps raid order.")
         L:Slider("DUI_RCW_MaxRows", "Visible Rows", 10, 40, 5, db, "maxRows", ApplyLayout,
             { fmt = "%d", value = db.maxRows, tooltip = "Rows shown before the list scrolls." })
         L:Slider("DUI_RCW_Scale", "Window Scale", 0.6, 1.5, 0.05, db, "scale", ApplyLayout,

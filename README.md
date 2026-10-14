@@ -33,6 +33,7 @@ Open it with `/dan`, `/dui` or the minimap button.
 | **RC & Pull** | Replaces the ready check prompt with a restyled one that shows your durability and has a repair bot button. It can also start a pull timer. Optionally, it whispers warlocks who have no Soulstone out. Only one DanUI client in the raid sends the whispers. |
 | **Ready Check window** | A raid inspection panel with columns for food, flask, vantus rune, augment rune and each class buff for every member. The table updates live as players answer the check. |
 | **Break Timer** | An on-screen countdown for BigWigs and DBM breaks. It can start a ready check automatically when the break ends. |
+| **Ula'tek** | Plays a Left or Right sound when the wave direction is called on Mythic Ula'tek. Works with Northern Sky Raid Tools' macros (`/yell` for Left, `/raid` for Right) and can create them for you. *Off by default.* |
 
 ### Combat
 
@@ -58,6 +59,7 @@ Open it with `/dan`, `/dui` or the minimap button.
 |---|---|
 | **Guild Bank Sorter** | Sorts the guild bank into tabs using rules you set. |
 | **Guild Bank Restock** | Refills your bags to target amounts from the guild bank, on the days and times you choose. *Off by default.* |
+| **Craft Planner** | Spreads one batch of crafts over several characters. Start a run and it builds an Auctionator shopping list for the whole plan. Each character then crafts its share from the Warband bank and deposits the result when a bank opens. |
 | **Warbank Gold** | Keeps each character's gold at a target amount by depositing or withdrawing from the Warband bank. Each character can have its own target. *Off by default.* |
 | **AutoPayout** | Sends gold to a list of players by mail, based on Auto Payout. |
 | **Automation** | Repairs your gear (with guild funds first, if allowed) and sells grey items at merchants. It also accepts summons and resurrections, and makes Release Spirit a press-and-hold action. |
@@ -82,6 +84,7 @@ DanUI is published through GitHub Releases.
 DanUI works on its own. It does more when these addons are installed:
 
 - **[BigWigs](https://www.curseforge.com/wow/addons/big-wigs):** needed for the pull alert, the Break button and the break display. DBM breaks are also picked up.
+- **Northern Sky Raid Tools:** the Ula'tek module uses its spoken Left/Right clips by default. Without it, the direction is read out with text-to-speech.
 - **[RaiderIO](https://www.curseforge.com/wow/addons/raiderio)** and **PremadeRegions:** add extra data to the LFG Filter.
 
 ## Commands
@@ -93,6 +96,7 @@ DanUI works on its own. It does more when these addons are installed:
 | `/duirc` | Open or close the Ready Check window |
 | `/duirctest` | Show a test ready check prompt |
 | `/duinag` | Explain what the automatic Soulstone whisper would do right now, without sending anything. `/duinag on` or `/duinag off` turns it on or off. |
+| `/duiula` | Explain what the Ula'tek wave-call sounds will do and why. `/duiula test` listens for 30 seconds so you can try the macros in a raid group. |
 | `/duipayout` | Open or close AutoPayout |
 
 On the minimap button, left-click opens the main window and right-click opens the Ready

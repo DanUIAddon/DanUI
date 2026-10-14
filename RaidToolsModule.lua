@@ -1,5 +1,6 @@
 -- RaidToolsModule.lua
--- Handles Auto-Invite, Battle Res Tracker settings, Floating Button lock, and Pull Timer.
+-- Handles Invites (whisper keywords, guild-rank filter, Invite All Guild, invite from a
+-- pasted list), Battle Res Tracker settings, Floating Button lock, and Pull Timer.
 -- Raid difficulty scheduling lives in its own module, RaidAutomation.lua.
 
 local db -- Local reference to DanUIDB.RaidTools
@@ -12,6 +13,17 @@ function DUI_GetRaidToolsDefaults()
         enabled = true,
         autoInviteEnabled = false,
         autoInviteKeywords = "inv invite",
+        -- A keyword as one word of a longer whisper ("inv pls"), not only the whole whisper.
+        inviteMatchAnywhere = false,
+        -- Whispers are honoured only from guild members at or above inviteMaxRank.
+        inviteGuildOnly = false,
+        -- 0-based guild rank index (0 = Guild Master), the lowest rank that gets an
+        -- invite. Shared by Invite All Guild and the guild-only whisper filter; 6 is
+        -- the "rankIndex < 7" Invite All Guild was hardcoded to.
+        inviteMaxRank = 6,
+        -- The last roster pasted into Invite From List, kept so a weekly list
+        -- doesn't have to be pasted again.
+        invitePasteList = "",
         battleResEnabled = true,
         battleResLocked = false,
         battleResSize = 40,
@@ -101,6 +113,231 @@ local function UpdateAutoInviteKeywords()
     end
 end
 
+-- The whole whisper is a keyword, or (inviteMatchAnywhere) any one word of it is.
+-- Words split on spaces and sentence punctuation, so "inv pls!" matches "inv".
+local function WhisperMatches(msg)
+    msg = strtrim(msg:lower())
+    if AutoInviteKeywordsTable[msg] then return true end
+    if not db.inviteMatchAnywhere then return false end
+    for word in msg:gmatch("[^%s,;%.!%?]+") do
+        if AutoInviteKeywordsTable[word] then return true end
+    end
+    return false
+end
+
+-- ---------------------------------------------------------------------------
+-- Guild ranks
+-- ---------------------------------------------------------------------------
+
+-- GuildControlGetRankName is 1-based; every rank index this file stores is the
+-- 0-based one GetGuildRosterInfo returns.
+local function RankName(index)
+    local name = GuildControlGetRankName and GuildControlGetRankName(index + 1)
+    if name and name ~= "" then return name end
+    return "Rank " .. (index + 1)
+end
+
+local function RankCutoffText()
+    local idx = db.inviteMaxRank or 6
+    local n = IsInGuild() and GuildControlGetNumRanks and GuildControlGetNumRanks() or 0
+    -- A cutoff below the guild's lowest rank lets everyone in; say that rather
+    -- than naming a rank that doesn't exist.
+    if n > 0 and idx >= n - 1 then return "Everyone" end
+    if idx == 0 then return RankName(0) .. " only" end
+    return RankName(idx) .. " and above"
+end
+
+-- Realm-qualified and lowercased, so a whisper sender, a roster entry and a typed
+-- name compare equal however each was written.
+local function NameKey(name)
+    if not name or name == "" then return nil end
+    if not name:find("-", 1, true) then
+        local realm = GetNormalizedRealmName()
+        if realm then name = name .. "-" .. realm end
+    end
+    return name:lower()
+end
+
+-- The sender's 0-based guild rank, or nil if they aren't in the guild - or the
+-- roster hasn't loaded, which reads the same. A walk per whisper is fine: it runs
+-- only while the guild-only filter is on and a keyword has already matched.
+local function GuildRankOf(name)
+    local key = NameKey(name)
+    if not (key and IsInGuild()) then return nil end
+    for i = 1, GetNumGuildMembers() do
+        local member, _, rankIndex = GetGuildRosterInfo(i)
+        if member and NameKey(member) == key then return rankIndex end
+    end
+end
+
+-- Refusals are printed once per sender per session: a raider spamming "inv" at a
+-- filter that won't let them in shouldn't fill the chat frame, but a silent
+-- refusal looks exactly like the addon not working.
+local refusedNotice = {}
+
+local function WhisperAllowed(sender)
+    if not db.inviteGuildOnly then return true end
+    local rank = GuildRankOf(sender)
+    if rank and rank <= (db.inviteMaxRank or 6) then return true end
+    if not refusedNotice[sender] then
+        refusedNotice[sender] = true
+        if rank then
+            print(string.format("|cFF00FF00[DUI]|r Not inviting %s: guild rank %s is below the cutoff (%s).",
+                sender, RankName(rank), RankCutoffText()))
+        else
+            print(string.format("|cFF00FF00[DUI]|r Not inviting %s: not in your guild (Invites is set to guild members only).", sender))
+        end
+    end
+    -- An empty roster is the likely cause of a wrong "not in your guild"; ask for
+    -- it so the next whisper is judged against real data.
+    if not rank and C_GuildInfo and C_GuildInfo.GuildRoster then C_GuildInfo.GuildRoster() end
+    return false
+end
+
+-- ---------------------------------------------------------------------------
+-- Invite from a pasted list
+-- ---------------------------------------------------------------------------
+
+-- Words a spreadsheet header or a Discord sign-up post puts on a line of its own.
+-- Without this they would be invited as character names and each one would print
+-- "player not found".
+local LIST_STOPWORDS = {
+    tank = true, tanks = true, healer = true, healers = true, heal = true, heals = true,
+    dps = true, melee = true, ranged = true, bench = true, name = true, names = true,
+    role = true, roles = true, class = true, roster = true, player = true, players = true,
+}
+
+-- Pulls character names out of whatever was pasted: one per line, or separated by
+-- commas, semicolons or tabs (a spreadsheet column or row). Each piece loses any
+-- leading clutter (a Discord @, list numbering, bullets) and anything after the
+-- first space ("Dan (Mage)", "Dan - tank"). Bytes 128-255 count as letters so
+-- accented names survive. Realms are kept when given; realm names are written
+-- without spaces, the way the client itself writes them (Name-Area52).
+--
+-- Multi-byte clutter is peeled off separately, since its bytes look like letters:
+-- U+2000-U+2BFF (bullets, dashes, arrows, symbols: lead byte 226), the emoji
+-- variation selector (239 184 x) and any 4-byte character (emoji, lead 240-244).
+-- Accented Latin, Cyrillic and CJK names use none of those lead bytes.
+local CLUTTER_HEAD = { "^[^%a\128-\255]+", "^\226[\128-\191][\128-\191]", "^\239\184[\128-\191]", "^[\240-\244][\128-\191][\128-\191][\128-\191]" }
+-- ASCII punctuation spelled out rather than %p: %p follows the C locale, and under
+-- a non-C one it matches bytes 128-255 too, which chops multi-byte letters off
+-- the end of a name.
+local CLUTTER_TAIL = { "[!-/:-@%[-`{-~]+$","\226[\128-\191][\128-\191]$", "\239\184[\128-\191]$", "[\240-\244][\128-\191][\128-\191][\128-\191]$" }
+
+local function Peel(s, patterns)
+    local before
+    repeat
+        before = s
+        for _, p in ipairs(patterns) do s = s:gsub(p, "") end
+    until s == before
+    return s
+end
+
+local function ParseNameList(text)
+    local names, seen = {}, {}
+    for raw in (text or ""):gmatch("[^\r\n,;\t]+") do
+        local piece = Peel(raw, CLUTTER_HEAD)
+        local name = piece:match("^[%a\128-\255][^%s]*")
+        if name then
+            name = Peel(name, CLUTTER_TAIL)
+            local base = name:match("^[^%-]+")
+            -- Character names never contain digits, which also drops times,
+            -- item levels and anything else numeric a sign-up post carries.
+            -- [0-9], not %d: some locales count superscript-digit bytes as %d,
+            -- and those bytes turn up inside Cyrillic letters.
+            if base and not base:find("[0-9]") and not LIST_STOPWORDS[base:lower()] then
+                local key = NameKey(name)
+                if key and not seen[key] then
+                    seen[key] = true
+                    names[#names + 1] = name
+                end
+            end
+        end
+    end
+    return names
+end
+
+local function AlreadyGrouped(name)
+    local key = NameKey(name)
+    if key == NameKey(UnitName("player")) then return true end
+    local unitName = Ambiguate(name, "none")
+    return UnitInRaid(unitName) or UnitInParty(unitName)
+end
+
+-- Solo, a party holds only four invites, and there is no group yet to convert.
+-- The rest of a long list waits here until someone accepts: then the party is
+-- converted and they go out through the same queue the whispers use.
+local heldInvites = {}
+local holdTimer
+local holdFrame = CreateFrame("Frame")
+
+local HOLD_TIMEOUT = 120
+
+local function ClearHeldInvites()
+    holdFrame:UnregisterEvent("GROUP_ROSTER_UPDATE")
+    if holdTimer then holdTimer:Cancel(); holdTimer = nil end
+    wipe(heldInvites)
+end
+
+holdFrame:SetScript("OnEvent", function()
+    -- GetNumGroupMembers >= 2: someone has actually accepted, so there is a party
+    -- to convert rather than just invites hanging off us.
+    if not (IsInGroup() and GetNumGroupMembers() >= 2 and UnitIsGroupLeader("player")) then return end
+    local names = { unpack(heldInvites) }
+    ClearHeldInvites()
+    RequestRaidConvert()
+    for _, n in ipairs(names) do QueueInvite(n) end
+    print(string.format("|cFF00FF00[DUI]|r Party formed - inviting the other %d.", #names))
+end)
+
+local function HoldUntilGrouped(names)
+    ClearHeldInvites()
+    for _, n in ipairs(names) do heldInvites[#heldInvites + 1] = n end
+    holdFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
+    holdTimer = C_Timer.NewTimer(HOLD_TIMEOUT, function()
+        holdTimer = nil
+        local n = #heldInvites
+        ClearHeldInvites()
+        print(string.format("|cFF00FF00[DUI]|r Nobody accepted within %d seconds; %d name%s from the list were not invited. Press Invite List again.",
+            HOLD_TIMEOUT, n, n == 1 and "" or "s"))
+    end)
+end
+
+-- Invites a list of names: four now and the rest held when solo, through the
+-- raid-conversion queue otherwise. Shared by Invite List and Invite All Guild.
+-- `what` names the source in the chat lines. Returns how many were invited or queued.
+local function InviteNames(names, what)
+    local todo = {}
+    for _, n in ipairs(names) do
+        if not AlreadyGrouped(n) then todo[#todo + 1] = n end
+    end
+    if #todo == 0 then
+        print(string.format("|cFF00FF00[DUI]|r Nobody to invite - %s is empty or already in the group.", what))
+        return 0
+    end
+    if IsInGroup() and not (UnitIsGroupLeader("player") or (IsInRaid() and UnitIsGroupAssistant("player"))) then
+        print("|cFF00FF00[DUI]|r Inviting needs group lead (or assist, in a raid).")
+        return 0
+    end
+
+    if not IsInGroup() and #todo > 4 then
+        for i = 1, 4 do C_PartyInfo.InviteUnit(todo[i]) end
+        HoldUntilGrouped({ unpack(todo, 5) })
+        print(string.format("|cFF00FF00[DUI]|r Invited 4; the other %d go out once someone accepts and the party becomes a raid.", #todo - 4))
+        return #todo
+    end
+
+    -- GetNumGroupMembers counts the player; a party can't hold more than five.
+    if GetNumGroupMembers() + #todo > 5 then RequestRaidConvert() end
+    for _, n in ipairs(todo) do QueueInvite(n) end
+    print(string.format("|cFF00FF00[DUI]|r Inviting %d from %s.", #todo, what))
+    return #todo
+end
+
+local function InviteNameList(text)
+    return InviteNames(ParseNameList(text), "the list")
+end
+
 -- The Auto-Assist List row owns every promotion this file makes, the guild-rank
 -- half included: it is the only switch in the main window that says "promote
 -- people", and the rank rule used to run with nothing able to turn it off.
@@ -184,7 +421,7 @@ function DUI_OpenInvitesConfig()
         InviteBtn:SetSize(140, 25); InviteBtn:SetPoint("TOP", 0, -45); InviteBtn:SetText("Invite All Guild")
         StyleAsTealTab(InviteBtn)
         DUI_AddTooltip(InviteBtn, "Invite All Guild",
-            { body = "Invites every online guild member of rank 6 or better, converting to a raid first if needed.",
+            { body = "Invites every online guild member at or above the rank set under Guild Rank, converting to a raid first if needed.",
               note = "Sends one invite per member -- there is no confirmation." })
         L:Gap(33)
         InviteBtn:SetScript("OnClick", function()
@@ -195,14 +432,40 @@ function DUI_OpenInvitesConfig()
                 return
             end
             if not IsInGuild() then return end
-            RequestRaidConvert()
+            local names = {}
             for i = 1, GetNumGuildMembers() do
                 local name, _, rankIndex, _, _, _, _, _, online = GetGuildRosterInfo(i)
-                if name and online and rankIndex < 7 then
-                    QueueInvite(name)
+                if name and online and rankIndex <= (db.inviteMaxRank or 6) then
+                    names[#names + 1] = name
                 end
             end
+            InviteNames(names, "the guild (at that rank cutoff)")
         end)
+
+        L:Header("Guild Rank")
+        local rankBtn = L:Dropdown("Lowest rank invited", {
+            tooltip = { body = "The lowest guild rank Invite All Guild invites, and the lowest a whisperer may be when Guild Members Only is ticked.",
+                        note = "Ranks run from Guild Master at the top down to the guild's newest rank." },
+        })
+        rankBtn:SetScript("OnClick", function(self)
+            local n = IsInGuild() and GuildControlGetNumRanks and GuildControlGetNumRanks() or 0
+            if n == 0 then
+                print("|cFF00FF00[DUI]|r You're not in a guild, or its ranks haven't loaded yet.")
+                return
+            end
+            local items = {}
+            for i = 0, n - 1 do
+                items[#items + 1] = { value = i, text = (i == 0) and (RankName(0) .. " only") or (RankName(i) .. " and above") }
+            end
+            DUI_ShowScrollDropdown(self, items, function(val)
+                db.inviteMaxRank = val
+                self:SetValue(RankCutoffText())
+            end, db.inviteMaxRank)
+        end)
+        invitesConfig.rankBtn = rankBtn
+        invitesConfig.guildOnlyCheck = L:Checkbox("Whispers: guild members only", db, "inviteGuildOnly", nil,
+            { body = "Only invites a whisperer who is in your guild at or above the rank above. Anyone else is told nothing; you get one chat line per refused name.",
+              note = "Invite From List ignores this - a list you paste is invited as written." })
 
         L:Header("Whisper Keywords")
         local AutoInviteInput = CreateFrame("EditBox", nil, invitesConfig, "BackdropTemplate")
@@ -219,20 +482,108 @@ function DUI_OpenInvitesConfig()
         end)
         invitesConfig.keywordInput = AutoInviteInput
         DUI_AddTooltip(AutoInviteInput, "Whisper Keywords",
-            "Space- or comma-separated words. A whisper containing any of them triggers an invite.")
-        L:Gap(32)
+            { body = "Space- or comma-separated words. A whisper that is exactly one of them triggers an invite.",
+              note = "Tick Match Anywhere below to also accept a keyword inside a longer whisper." })
+        -- Advance, not Gap: Gap doesn't stretch the section card over the box.
+        L:Advance(32)
+        invitesConfig.anywhereCheck = L:Checkbox("Match a keyword anywhere in the whisper", db, "inviteMatchAnywhere", nil,
+            { body = "Also invites when a keyword is one word of a longer whisper, so \"inv pls\" or \"can I get an invite?\" counts.",
+              note = "Whole words only: \"inv\" doesn't match \"invested\"." })
 
         -- The "Auto-invite on matching whisper" checkbox that stood here is now
         -- the module's own checkbox on the launcher rail, alongside every other
         -- module's, rather than a second switch buried one click deeper.
-        L:Gap()
-        L:Text("Whisper any of these keywords (space or comma separated) to be invited automatically. A full party is converted to a raid first, so the sixth whisper still gets in. Auto-invite follows this module's checkbox in the module list.")
+        L:Text("Whisper any of these keywords to be invited automatically. A full party is converted to a raid first, so the sixth whisper still gets in. Auto-invite follows this module's checkbox in the module list.")
+
+        L:Header("Invite From List")
+        L:Text("Paste names one per line, or separated by commas or tabs: a spreadsheet column or a Discord sign-up post. Mentions, numbering and anything after the name (\"Dan (Mage)\") are dropped. Anyone already in the group is skipped.")
+
+        -- A multi-line edit box in a scroll frame. The box grows with its text and
+        -- the scroll frame keeps the caret in view, so a 30-name paste stays usable.
+        local PASTE_H = 120
+        local pasteBox = CreateFrame("Frame", nil, invitesConfig, "BackdropTemplate")
+        pasteBox:SetSize(L:ContentWidth(), PASTE_H)
+        DUI_StyleAsListBox(pasteBox)
+        local sf = CreateFrame("ScrollFrame", nil, pasteBox)
+        sf:SetPoint("TOPLEFT", 6, -6); sf:SetPoint("BOTTOMRIGHT", -6, 6)
+        local eb = CreateFrame("EditBox", nil, sf)
+        eb:SetMultiLine(true); eb:SetAutoFocus(false); eb:SetFontObject(DUI_FontNormal)
+        eb:SetWidth(L:ContentWidth() - 12)
+        eb:SetTextInsets(2, 2, 2, 2)
+        sf:SetScrollChild(eb)
+        eb:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+        eb:SetScript("OnCursorChanged", function(_, _, y, _, h)
+            y = -y
+            local top, view = sf:GetVerticalScroll(), sf:GetHeight()
+            if y < top then
+                sf:SetVerticalScroll(y)
+            elseif y + h > top + view then
+                sf:SetVerticalScroll(y + h - view)
+            end
+        end)
+        sf:EnableMouseWheel(true)
+        sf:SetScript("OnMouseWheel", function(self, delta)
+            self:SetVerticalScroll(math.max(0, math.min(self:GetVerticalScrollRange(), self:GetVerticalScroll() - delta * 20)))
+        end)
+        -- The edit box is only as tall as its text; a click in the empty space
+        -- below it should still land in the box.
+        pasteBox:EnableMouse(true)
+        pasteBox:SetScript("OnMouseDown", function() eb:SetFocus() end)
+        L:Place(pasteBox)
+
+        local countText
+        local function UpdateCount()
+            local n = #ParseNameList(eb:GetText())
+            countText:SetText(n == 0 and "No names found" or string.format("%d name%s found", n, n == 1 and "" or "s"))
+        end
+        eb:SetScript("OnTextChanged", function(self, isUser)
+            if isUser then db.invitePasteList = self:GetText() end
+            UpdateCount()
+        end)
+
+        local listBtn = CreateFrame("Button", nil, invitesConfig, "BackdropTemplate")
+        listBtn:SetSize(120, 25); listBtn:SetPoint("TOPLEFT", 40, L:Y()); listBtn:SetText("Invite List")
+        StyleAsTealTab(listBtn)
+        DUI_AddTooltip(listBtn, "Invite List",
+            { body = "Invites every name in the box who isn't already in the group, converting to a raid when the list won't fit in a party.",
+              note = "Solo, four go out at once and the rest follow as soon as someone accepts." })
+        listBtn:SetScript("OnClick", function()
+            if not db.autoInviteEnabled then
+                print("|cFF00FF00[DUI]|r Invites is switched off in the module list.")
+                return
+            end
+            eb:ClearFocus()
+            InviteNameList(eb:GetText())
+        end)
+
+        local clearBtn = CreateFrame("Button", nil, invitesConfig, "BackdropTemplate")
+        clearBtn:SetSize(70, 25); clearBtn:SetPoint("LEFT", listBtn, "RIGHT", 8, 0); clearBtn:SetText("Clear")
+        StyleAsTealTab(clearBtn)
+        DUI_AddTooltip(clearBtn, "Clear", "Empties the box.")
+        clearBtn:SetScript("OnClick", function()
+            db.invitePasteList = ""
+            eb:SetText("")
+            eb:ClearFocus()
+        end)
+
+        countText = invitesConfig:CreateFontString(nil, "OVERLAY", "DUI_FontSmall")
+        countText:SetPoint("LEFT", clearBtn, "RIGHT", 12, 0)
+        countText:SetTextColor(0.85, 0.85, 0.85)
+        L:Advance(DUI_LAYOUT.ROW + 6)
+        invitesConfig.pasteEdit = eb
 
         L:FitHeight()
         invitesConfig.init = true
     end
     -- Re-sync widgets to the current saved values whenever the panel opens.
+    -- Rank names come from the server, so the roster is asked for here; the
+    -- dropdown re-reads them each time it opens.
+    if IsInGuild() and C_GuildInfo and C_GuildInfo.GuildRoster then C_GuildInfo.GuildRoster() end
     invitesConfig.keywordInput:SetText(db.autoInviteKeywords or "")
+    invitesConfig.rankBtn:SetValue(RankCutoffText())
+    invitesConfig.guildOnlyCheck:SetChecked(db.inviteGuildOnly)
+    invitesConfig.anywhereCheck:SetChecked(db.inviteMatchAnywhere)
+    invitesConfig.pasteEdit:SetText(db.invitePasteList or "")
     invitesConfig:Show()
 end
 
@@ -376,6 +727,8 @@ local function SyncRaidToolsEvents()
         if pendingTimer then pendingTimer:Cancel(); pendingTimer = nil end
         wipe(pendingInvites)
         converting, pendingTries = false, 0
+        -- So would the rest of a pasted list waiting for the party to form.
+        ClearHeldInvites()
     end
     if AssistEnabled() then
         eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
@@ -392,8 +745,9 @@ DUI_InvitesApplyEnabled = SyncRaidToolsEvents
 DUI_AssistApplyEnabled = SyncRaidToolsEvents
 
 function DUI_InitRaidToolsModule()
-    if not DanUIDB.RaidTools then DanUIDB.RaidTools = DUI_GetRaidToolsDefaults() end
-    db = DanUIDB.RaidTools
+    -- Backfills too: an existing table predates the invite filter keys, and the
+    -- whisper handler reads them before the Invites panel is ever opened.
+    EnsureRaidToolsDB()
 
     UpdateAutoInviteKeywords()
 
@@ -401,8 +755,8 @@ function DUI_InitRaidToolsModule()
     eventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
         if event == "CHAT_MSG_WHISPER" then
             if not db.autoInviteEnabled then return end
-            local msg, sender = strtrim(arg1:lower()), arg2
-            if AutoInviteKeywordsTable[msg] then
+            local sender = arg2
+            if WhisperMatches(arg1) and WhisperAllowed(sender) then
                 -- GetNumGroupMembers() counts the player, so 5 is a full party
                 -- and the sender is the sixth: convert first, then invite once
                 -- the raid is actually up (QueueInvite holds it until then).
