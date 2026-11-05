@@ -35,6 +35,16 @@ local MYTHIC_WINDOWS = {
     { name = "Submerge",    time = 79.4 },
     { name = "Second Wave", time = 113 },
 }
+-- Heroic has no NSRT direction feature, so these are derived. The waves (48 / 100) are
+-- NSRT's own Heroic Caustic Wave timers. The submerge is BigWigs' Heroic pull-time bar
+-- (62s) plus the same 2.4s that separates its Mythic bar (77s) from NSRT's Mythic
+-- submerge time (79.4s); the waves line up the same way (bar 42 + 6 = 48, Mythic 50 + 6
+-- = 56). If Heroic submerge cues land off, that 64.4 is the number to check.
+local HEROIC_WINDOWS = {
+    { name = "First Wave",  time = 48 },
+    { name = "Submerge",    time = 64.4 },
+    { name = "Second Wave", time = 100 },
+}
 -- NSRT reads yell/raid/raid warning as the transition soak pattern in this span, on
 -- every difficulty. "Listen All Fight" closes here so those presses aren't cues.
 local TRANSITION_FROM, TRANSITION_TO = 325, 340
@@ -57,6 +67,7 @@ function DUI_GetUlatekDefaults()
         rightSound = NSRT_RIGHT,
         submergeSound = true,   -- also cue the submerge call, not only the two waves
         wholeFight = false,     -- listen for the whole pull, any difficulty
+        heroic = false,         -- also open the call windows on Heroic
     }
 end
 
@@ -155,7 +166,12 @@ end)
 local function ArmEncounter(difficultyID)
     StopListening()
     local t = DB()
-    local mythic = difficultyID == DIFF_MYTHIC or difficultyID == DIFF_MYTHIC_FLEX
+    local windows
+    if difficultyID == DIFF_MYTHIC or difficultyID == DIFF_MYTHIC_FLEX then
+        windows = MYTHIC_WINDOWS
+    elseif difficultyID == DIFF_HEROIC and t.heroic then
+        windows = HEROIC_WINDOWS
+    end
 
     if t.wholeFight then
         SetListening(true, "Whole Fight")
@@ -164,18 +180,17 @@ local function ArmEncounter(difficultyID)
         return
     end
 
-    if not mythic then
-        -- Silent declines read as bugs, so say it once. Heroic has no fixed submerge
-        -- timing to build windows from; whole-fight mode is the way to get it there.
+    if not windows then
+        -- Silent declines read as bugs, so say it once.
         if difficultyID == DIFF_HEROIC and not wrongDiffNoticeShown then
             wrongDiffNoticeShown = true
-            print(DUI_AccentText("DanUI") .. ": Ula'tek wave calls only listen on Mythic. Tick "
-                .. "\"Listen All Fight\" in the Ula'tek panel to use them here.")
+            print(DUI_AccentText("DanUI") .. ": Ula'tek wave calls are off on Heroic. Tick "
+                .. "\"Heroic\" in the Ula'tek panel to use them here.")
         end
         return
     end
 
-    for _, w in ipairs(MYTHIC_WINDOWS) do
+    for _, w in ipairs(windows) do
         At(w.time - WINDOW_PAD, function() SetListening(true, w.name) end)
         At(w.time + WINDOW_PAD, function()
             if currentWindow == w.name then SetListening(false) end
@@ -295,7 +310,8 @@ SlashCmdList.DUIULATEK = function(msg)
         .. TEST_LISTEN .. "s, |cffffffff/duiula left|r / |cffffffffright|r plays a cue.")
     print("  Module: " .. (t.enabled and "|cff00FF00enabled|r" or "|cffFFA500disabled|r"))
     print("  Mode: " .. (t.wholeFight and "whole fight, any difficulty (except " .. TRANSITION_FROM .. "-" .. TRANSITION_TO .. "s)"
-        or "Mythic windows only (56s / 79.4s / 113s, +/-" .. WINDOW_PAD .. "s)"))
+        or ("Mythic 56s / 79.4s / 113s" .. (t.heroic and ", Heroic 48s / 64.4s / 100s" or ", Heroic off")
+            .. " (+/-" .. WINDOW_PAD .. "s)")))
     print("  Left: " .. SoundStatus(t.leftSound) .. "   Right: " .. SoundStatus(t.rightSound))
     print("  Submerge call: " .. (t.submergeSound and "cued" or "|cffFFA500ignored|r"))
     print("  Listening now: " .. (listening and ("|cff00FF00yes|r (" .. tostring(currentWindow) .. ")") or "no"))
@@ -363,12 +379,16 @@ function DUI_OpenUlatekConfig()
             "Also plays the sound for the call at the submerge (~79s), not only the two waves. Northern Sky shows nothing for that call by itself - it folds it into the second wave's text.")
 
         L:Header("Listening")
+        L:Checkbox("Heroic", db, "heroic", nil, {
+            body = "Also listens on Heroic: from 6s before to 6s after the first wave (48s), the submerge (~64s) and the second wave (100s).",
+            note = "Northern Sky has no Heroic version of this, so the Heroic submerge time is worked out from BigWigs' timers rather than taken from Northern Sky.",
+        })
         L:Checkbox("Listen All Fight", db, "wholeFight", nil, {
             body = "Listens for the whole pull on any difficulty, instead of only around the Mythic waves and submerge.",
             note = "Any raid chat then plays the Right sound. Skips " .. TRANSITION_FROM .. "-" .. TRANSITION_TO
                 .. "s, where the same macros call the transition soak pattern.",
         })
-        L:Text("Default: Mythic only, from 6s before to 6s after the first wave (56s), the submerge (79.4s) and the second wave (113s) - the same windows Northern Sky uses.")
+        L:Text("Mythic listens from 6s before to 6s after the first wave (56s), the submerge (79.4s) and the second wave (113s) - the same windows Northern Sky uses.")
 
         L:Header("Macros & Testing")
         PanelButton(L, "Create Macros",

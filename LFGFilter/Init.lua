@@ -368,7 +368,11 @@ function PGF.OnPlayerLogin()
 end
 
 function PGF.OnEvent(self, event, ...)
-    if event == "ADDON_LOADED" then PGF.OnAddonLoaded(...) end
+    if event == "ADDON_LOADED" then
+        PGF.OnAddonLoaded(...)
+        -- DUI: only our own load matters; stop hearing every later addon load.
+        if ... == PGFAddonName then self:UnregisterEvent("ADDON_LOADED") end
+    end
     if event == "PLAYER_LOGIN" then PGF.OnPlayerLogin() end
     if event == "LFG_LIST_APPLICATION_STATUS_UPDATED" then PGF.OnLFGListApplicationStatusUpdated(...) end
 end

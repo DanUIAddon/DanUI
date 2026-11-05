@@ -1182,7 +1182,7 @@ addRuleBtn:SetScript("OnClick", function()
         end
         local row = ruleRows[i]
         row.frame:SetPoint("TOPLEFT", rulesContent, "TOPLEFT", 10, offset)
-        local name, link = GetItemInfo(rule.itemID)
+        local name, link = C_Item.GetItemInfo(rule.itemID)
         if not name and C_Item and C_Item.RequestLoadItemData then
             pcall(C_Item.RequestLoadItemData, rule.itemID)
         end
@@ -1359,7 +1359,7 @@ function RefreshGuildBankSortRules()
         end
         local row = ruleRows[i]
         row.frame:SetPoint("TOPLEFT", rulesContent, "TOPLEFT", 10, offset)
-        local name, link = GetItemInfo(rule.itemID)
+        local name, link = C_Item.GetItemInfo(rule.itemID)
         if not name and C_Item and C_Item.RequestLoadItemData then
             pcall(C_Item.RequestLoadItemData, rule.itemID)
         end
@@ -1460,7 +1460,7 @@ function ForceRefreshGuildBankSortRules()
         end
         local row = ruleRows[i]
         row.frame:SetPoint("TOPLEFT", rulesContent, "TOPLEFT", 10, offset)
-        local name, link = GetItemInfo(rule.itemID)
+        local name, link = C_Item.GetItemInfo(rule.itemID)
         if not name and C_Item and C_Item.RequestLoadItemData then
             pcall(C_Item.RequestLoadItemData, rule.itemID)
         end

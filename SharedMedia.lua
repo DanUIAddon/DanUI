@@ -114,6 +114,7 @@ local sounds = {
     { "|cFF9CAF88getinbubbletts|r",     "getinbubbletts.mp3" },
     { "|cFF9CAF88goleftdodgewavestts|r","goleftdodgewavestts.mp3" },
     { "|cFF9CAF88gorightdodgewavestts|r","gorightdodgewavestts.mp3" },
+    { "|cFF9CAF88runtobigeggtts|r",     "runtobigeggtts.mp3" },
 }
 
 for _, entry in ipairs(sounds) do

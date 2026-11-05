@@ -33,7 +33,7 @@ Open it with `/dan`, `/dui` or the minimap button.
 | **RC & Pull** | Replaces the ready check prompt with a restyled one that shows your durability and has a repair bot button. It can also start a pull timer. Optionally, it whispers warlocks who have no Soulstone out. Only one DanUI client in the raid sends the whispers. |
 | **Ready Check window** | A raid inspection panel with columns for food, flask, vantus rune, augment rune and each class buff for every member. The table updates live as players answer the check. |
 | **Break Timer** | An on-screen countdown for BigWigs and DBM breaks. It can start a ready check automatically when the break ends. |
-| **Ula'tek** | Plays a Left or Right sound when the wave direction is called on Mythic Ula'tek. Works with Northern Sky Raid Tools' macros (`/yell` for Left, `/raid` for Right) and can create them for you. *Off by default.* |
+| **Ula'tek** | Plays a Left or Right sound when the wave direction is called on Mythic Ula'tek, and optionally Heroic. Works with Northern Sky Raid Tools' macros (`/yell` for Left, `/raid` for Right) and can create them for you. *Off by default.* |
 
 ### Combat
 

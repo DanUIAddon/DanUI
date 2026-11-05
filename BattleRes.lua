@@ -125,16 +125,19 @@ function UpdateCharges()
     frame:Show()
 end
 
+-- Hoisted so the end of every fight doesn't allocate a fresh closure for it.
+local function PostCombatRecheck()
+    if not InCombatLockdown() then
+        UpdateCharges() -- Re-check if we should still be showing
+    end
+end
+
 frame:SetScript("OnEvent", function(self, event)
     if event == "PLAYER_REGEN_DISABLED" or event == "ENCOUNTER_START" then
         UpdateCharges()
     elseif event == "PLAYER_REGEN_ENABLED" or event == "ENCOUNTER_END" then
         -- Keep visible for 10 seconds after combat then hide if not in a group
-        C_Timer.After(10, function()
-            if not InCombatLockdown() then
-                UpdateCharges() -- Re-check if we should still be showing
-            end
-        end)
+        C_Timer.After(10, PostCombatRecheck)
     elseif event == "SPELL_UPDATE_CHARGES" then
         UpdateCharges()
     end
@@ -177,4 +180,4 @@ function ToggleBRTracker(enabled)
         frame:SetScript("OnUpdate", nil)
         frame:Hide()
     end
-end
+end

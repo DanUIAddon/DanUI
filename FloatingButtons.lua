@@ -91,13 +91,16 @@ local function IsButtonEnabled(def)
     return not rt or rt[def.dbKey] ~= false
 end
 
--- The buttons actually on the bar, in bar order.
+-- The buttons actually on the bar, in bar order. One list, refilled per call:
+-- UpdateFloatingBar runs on every roster burst and after every fight, and used to
+-- build two of these each time. No caller keeps the list past its own use.
+local enabledDefs = {}
 local function EnabledDefs()
-    local list = {}
+    wipe(enabledDefs)
     for _, def in ipairs(BUTTON_DEFS) do
-        if IsButtonEnabled(def) then list[#list + 1] = def end
+        if IsButtonEnabled(def) then enabledDefs[#enabledDefs + 1] = def end
     end
-    return list
+    return enabledDefs
 end
 
 -- Cancel-button lifetime.

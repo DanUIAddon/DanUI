@@ -877,6 +877,8 @@ function DUI_InitGuildBankRestock()
     DUI_InitGuildBankRestockDB()
     HookGuildBankFrame() -- covers a /reload taken with the guild bank already open
 
-    eventFrame:RegisterEvent("ADDON_LOADED")
+    -- Only waited for while the hook is still missing: once it is in, ADDON_LOADED
+    -- would just wake this for every other addon that loads.
+    if not hooked then eventFrame:RegisterEvent("ADDON_LOADED") end
     eventFrame:RegisterEvent("GUILDBANK_UPDATE_TABS")
 end

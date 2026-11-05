@@ -118,12 +118,19 @@ local function Paint(button, fs, bag, slot, quality)
     end
     if level <= 1 then fs:Hide(); return end
 
-    fs:SetText(level)
-    local c = db.colorByQuality and quality and ITEM_QUALITY_COLORS[quality]
-    if c then
-        fs:SetTextColor(c.r, c.g, c.b, 1)
-    else
-        fs:SetTextColor(unpack(db.fontColor or DUI_Theme.Accent))
+    -- Every BAG_UPDATE repaints every gear slot in the open bags, and nearly all of
+    -- them show the same item as last time. Skipping the unchanged ones saves the
+    -- FontString relayout. A settings change clears the key (see
+    -- DUI_RefreshBagItemLevels), so colour changes still repaint.
+    if fs.shownLevel ~= level or fs.shownQuality ~= quality then
+        fs.shownLevel, fs.shownQuality = level, quality
+        fs:SetText(level)
+        local c = db.colorByQuality and quality and ITEM_QUALITY_COLORS[quality]
+        if c then
+            fs:SetTextColor(c.r, c.g, c.b, 1)
+        else
+            fs:SetTextColor(unpack(db.fontColor or DUI_Theme.Accent))
+        end
     end
     fs:Show()
 end
@@ -180,7 +187,7 @@ end
 -- Repaints every open bag. Called on any settings change; a closed bag repaints
 -- itself through the hook when it next opens.
 function DUI_RefreshBagItemLevels()
-    for _, fs in pairs(labels) do fs.styled = nil end
+    for _, fs in pairs(labels) do fs.styled, fs.shownLevel = nil, nil end
     EachContainerFrame(function(f)
         if f:IsShown() then UpdateFrame(f) end
     end)

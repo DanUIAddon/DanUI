@@ -13,6 +13,7 @@ local db -- Local reference to DanUIDB.CombatAlerts
 local UnitIsDeadOrGhost, UnitIsFeignDeath = UnitIsDeadOrGhost, UnitIsFeignDeath
 local GetTime, IsInGroup, IsInRaid = GetTime, IsInGroup, IsInRaid
 local GetNumGroupMembers = GetNumGroupMembers
+local UnitName, GetNormalizedRealmName, strlower = UnitName, GetNormalizedRealmName, string.lower
 
 local pullEndTime = 0
 local alertFired = false -- the trigger point has been passed for this countdown
@@ -46,6 +47,9 @@ function DUI_GetCombatAlertsDefaults()
         deathAlert = true,
         deathSound = "Quest Failed",
         deathThrottle = 0.5,
+        -- Per-player overrides: normalized key -> { name = as typed, sound = LSM name
+        -- or "None" to mute that player }. See NormalizePlayerKey for the key.
+        deathPlayers = {},
     }
 end
 
@@ -357,9 +361,70 @@ local function IsGroupUnit(unit)
     return unit ~= nil and DUI_GROUP_UNIT_SET[unit] == true
 end
 
+-- ---- per-player sounds ----------------------------------------------------
+-- Matching is by name, read from the unit token. Names are cached per token at
+-- roster changes (normally out of combat) rather than read at the moment of death,
+-- so the encounter-time read only happens for a token the cache missed. Every read
+-- is checked with issecretvalue *before* anything else touches it: chat senders are
+-- secret during an encounter on this client, and a name that ever comes back secret
+-- must fall through to the generic sound, never into a compare.
+
+local unitNameKey = {}    -- unit token -> "name-realm", lowercased; false = unreadable
+local namedPlayedAt = {}  -- player key -> GetTime() before which it won't play again
+
+local function IsSecret(v)
+    return issecretvalue and issecretvalue(v)
+end
+
+-- "Bob", " bob-Twisting Nether" and "BOB-TwistingNether" all come out the same.
+-- Spaces are stripped because GetNormalizedRealmName strips them from realms.
+-- Explicit whitespace set, not %s: under a non-C locale %s can match bytes in the
+-- 128-255 range and chop a UTF-8 name. strlower only folds ASCII, so a name whose
+-- first letter is non-ASCII has to be typed with that letter's case as in game.
+local function NormalizePlayerKey(text)
+    if type(text) ~= "string" then return nil end
+    text = text:gsub("[ \t\r\n]", "")
+    if text == "" then return nil end
+    return strlower(text)
+end
+
+local function ReadUnitKey(unit)
+    local name, realm = UnitName(unit)
+    if IsSecret(name) or IsSecret(realm) then return false end
+    if not name or name == "" then return false end
+    if not realm or realm == "" then realm = GetNormalizedRealmName() end
+    if IsSecret(realm) or not realm then return strlower(name) end
+    return strlower(name .. "-" .. realm)
+end
+
+-- The sound set for whoever is on `unit`, and the key it was matched under. A full
+-- "name-realm" entry wins over a bare-name one.
+local function NamedDeathSound(unit)
+    local players = db.deathPlayers
+    if not players or next(players) == nil then return nil end
+    local key = unitNameKey[unit]
+    if key == nil then
+        key = ReadUnitKey(unit)
+        unitNameKey[unit] = key
+    end
+    if not key then return nil end
+    local entry = players[key] or players[key:match("^[^-]+")]
+    if not entry then return nil end
+    return entry.sound or "None", key
+end
+
+local rosterScratch = {}
 local function RefreshRosterCache()
-    -- Create a temporary new cache to handle joined/left members
-    local newCache = {}
+    -- Tokens move between players on a roster change, so the name cache starts over.
+    -- It is filled below only while there is anything to match against; with no
+    -- player sounds set, the death path never asks for it.
+    wipe(unitNameKey)
+    local wantNames = db and db.deathPlayers and next(db.deathPlayers) ~= nil
+
+    -- A scratch table to handle joined/left members. Reused rather than built per
+    -- call: GROUP_ROSTER_UPDATE arrives in bursts of a dozen or more on a zone-in.
+    local newCache = rosterScratch
+    wipe(newCache)
 
     -- Always track the player specifically, regardless of group status
     newCache["player"] = UnitIsDeadOrGhost("player")
@@ -378,6 +443,7 @@ local function RefreshRosterCache()
     -- Update the main cache
     for unit, state in pairs(newCache) do
         deadCache[unit] = state
+        if wantNames then unitNameKey[unit] = ReadUnitKey(unit) end
     end
 end
 
@@ -402,7 +468,23 @@ local function OnUnitUpdate(unit)
     -- Transition from Alive to Dead
     if not wasDead and isDead then
         local now = GetTime()
-        if now >= nextDeathSoundAt then
+        local named, key = NamedDeathSound(unit)
+        if named then
+            -- A named player skips the throttle: in a wipe, the throttle would
+            -- otherwise swallow exactly the death they were named to stand out
+            -- from. The 1s per-player latch is for the same death arriving twice:
+            -- in a raid, "player" and the raidN token both fire for yourself.
+            if now >= (namedPlayedAt[key] or 0) then
+                namedPlayedAt[key] = now + 1
+                -- "None" mutes that player, and a muted death shouldn't hold back
+                -- someone else's sound, so only a played one arms the throttle.
+                local path = named ~= "None" and LSM:Fetch("sound", named)
+                if path then
+                    PlaySoundFile(path, "Master")
+                    nextDeathSoundAt = math.max(nextDeathSoundAt, now + (db.deathThrottle or 0.5))
+                end
+            end
+        elseif now >= nextDeathSoundAt then
             local path = db.deathSound and db.deathSound ~= "None" and LSM:Fetch("sound", db.deathSound)
             if path then
                 PlaySoundFile(path, "Master")
@@ -417,9 +499,21 @@ end
 -- OnUpdate and the BigWigs message registrations, and the death watch has to be
 -- able to drop every event it owns without disturbing those.
 local deathFrame = CreateFrame("Frame")
+-- GROUP_ROSTER_UPDATE arrives in bursts (a dozen or more on a zone-in or while a raid
+-- fills), and each one re-walked the whole roster. They are folded into one walk on
+-- the next frame. Nothing is lost in that frame: the walk keeps every state it already
+-- had, and a token it has not seen yet is set up by its own first UNIT_HEALTH.
+local rosterRefreshQueued = false
+local function FlushRosterRefresh()
+    rosterRefreshQueued = false
+    RefreshRosterCache()
+end
 deathFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_ENTERING_WORLD" then
-        RefreshRosterCache()
+        if not rosterRefreshQueued then
+            rosterRefreshQueued = true
+            C_Timer.After(0, FlushRosterRefresh)
+        end
     elseif event == "PLAYER_DEAD" then
         OnUnitUpdate("player")
     end
@@ -650,6 +744,139 @@ function DUI_OpenCombatAlertsConfig()
             { fmt = "%.1fs", value = db.deathThrottle,
               tooltip = "Stops a wipe from firing the sound once per player. Set to 0 to hear every death." })
 
+        -- ---- per-player sounds ----
+        L:Text("Player sounds: a named player's death plays their own sound instead of the one above, and isn't held back by the throttle. A name alone matches any realm; add -Realm to match only one.")
+
+        local SOUND_W, ADD_W, GAP = 170, 60, 6
+        local pendingSound = db.deathSound or "None"
+
+        local nameInput = CreateFrame("EditBox", nil, config, "BackdropTemplate")
+        nameInput:SetSize(L:ContentWidth() - SOUND_W - ADD_W - GAP * 2, 24)
+        nameInput:SetAutoFocus(false); nameInput:SetFontObject(DUI_FontNormal)
+        nameInput:SetBackdrop(DUI_EditBackdrop); nameInput:SetBackdropColor(0, 0, 0, 0.5); nameInput:SetBackdropBorderColor(unpack(DUI_Theme.Accent))
+        DUI_RegisterAccent(nameInput, "border")
+        nameInput:SetTextInsets(5, 5, 0, 0)
+        nameInput:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+        DUI_AddTooltip(nameInput, "Player name",
+            "Character name, optionally Name-Realm. Pick the sound beside it, then Add (or press Enter).")
+
+        local function SoundItems()
+            local items = { { text = "None", value = "None" } }
+            for _, s in ipairs(LSM:List("sound")) do table.insert(items, { text = s, value = s }) end
+            return items
+        end
+        local function Preview(val)
+            if val ~= "None" then local path = LSM:Fetch("sound", val); if path then PlaySoundFile(path, "Master") end end
+        end
+
+        local newSoundBtn = DUI_CreateDropdown(config, nil, { width = SOUND_W,
+            tooltip = "Sound for the player being added. None mutes that player's deaths entirely." })
+        newSoundBtn:SetPoint("LEFT", nameInput, "RIGHT", GAP, 0)
+        newSoundBtn:SetValue(pendingSound)
+        newSoundBtn:SetScript("OnClick", function(self)
+            DUI_ShowScrollDropdown(self, SoundItems(), function(val)
+                pendingSound = val; self:SetValue(val); Preview(val)
+            end, pendingSound)
+        end)
+
+        local addBtn = CreateFrame("Button", nil, config, "BackdropTemplate")
+        addBtn:SetSize(ADD_W, 24); addBtn:SetPoint("LEFT", newSoundBtn, "RIGHT", GAP, 0)
+        addBtn:SetText("Add"); StyleAsTealTab(addBtn)
+        L:Place(nameInput, { step = 32 })
+
+        -- Fixed height with its own scroll, rather than growing: the panel sizes
+        -- itself once at build (FitHeight), so a list that grew would run under the
+        -- Test button.
+        local ROW_H, VISIBLE_ROWS = 22, 5
+        local listBox = CreateFrame("Frame", nil, config, "BackdropTemplate")
+        listBox:SetHeight(ROW_H * VISIBLE_ROWS + 10)
+        DUI_StyleAsListBox(listBox)
+        L:Place(listBox, { fill = true })
+
+        -- Sized explicitly, not by two anchors: area:Update reads GetHeight, and the
+        -- first refresh runs before the panel is shown, when an anchor-derived height
+        -- is still 0 and would turn the scrollbar on over a list that fits.
+        local area = DUI_CreateScrollArea(listBox)
+        area:SetPoint("TOPLEFT", 5, -5)
+        area:SetSize(L:ContentWidth() - 10, ROW_H * VISIBLE_ROWS)
+        -- The scroll child has no width of its own; rows span it via two anchors.
+        -- 16 is the scrollbar gutter DUI_CreateScrollArea keeps while it scrolls.
+        area.content:SetWidth(L:ContentWidth() - 10 - 16)
+
+        local emptyText = listBox:CreateFontString(nil, "OVERLAY", "DUI_FontSmall")
+        emptyText:SetPoint("CENTER"); emptyText:SetTextColor(0.6, 0.6, 0.6)
+        emptyText:SetText("No players added.")
+
+        local rows = {}
+        local RefreshPlayerList
+
+        local function CreatePlayerRow()
+            local row = CreateFrame("Frame", nil, area.content)
+            row:SetHeight(ROW_H)
+            local delBtn = CreateFrame("Button", nil, row, "BackdropTemplate")
+            delBtn:SetSize(16, 16); delBtn:SetPoint("LEFT", 0, 0)
+            delBtn:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+            delBtn:SetBackdropColor(unpack(DUI_Theme.Accent)); delBtn:SetBackdropBorderColor(0, 0, 0, 1)
+            DUI_RegisterAccent(delBtn, "bg")
+            local delX = delBtn:CreateFontString(nil, "OVERLAY", "DUI_FontSmall")
+            delX:SetPoint("CENTER"); delX:SetText("X"); delX:SetTextColor(1, 1, 1)
+            local sound = DUI_CreateDropdown(row, nil, { width = SOUND_W, height = 20 })
+            sound:SetPoint("RIGHT", 0, 0)
+            local text = row:CreateFontString(nil, "OVERLAY", "DUI_FontNormal")
+            text:SetPoint("LEFT", delBtn, "RIGHT", 6, 0)
+            text:SetPoint("RIGHT", sound, "LEFT", -6, 0)
+            text:SetJustifyH("LEFT"); text:SetWordWrap(false)
+            return { frame = row, delBtn = delBtn, sound = sound, text = text }
+        end
+
+        function RefreshPlayerList()
+            local players = db.deathPlayers or {}
+            local keys = {}
+            for k in pairs(players) do keys[#keys + 1] = k end
+            table.sort(keys)
+            for _, r in ipairs(rows) do r.frame:Hide() end
+            for i, key in ipairs(keys) do
+                local entry = players[key]
+                local r = rows[i] or CreatePlayerRow()
+                rows[i] = r
+                r.frame:ClearAllPoints()
+                r.frame:SetPoint("TOPLEFT", 0, -(i - 1) * ROW_H)
+                r.frame:SetPoint("TOPRIGHT", 0, -(i - 1) * ROW_H)
+                r.text:SetText(entry.name or key)
+                r.sound:SetValue(entry.sound or "None")
+                r.sound:SetScript("OnClick", function(self)
+                    DUI_ShowScrollDropdown(self, SoundItems(), function(val)
+                        entry.sound = val; self:SetValue(val); Preview(val)
+                    end, entry.sound)
+                end)
+                r.delBtn:SetScript("OnClick", function()
+                    players[key] = nil
+                    RefreshPlayerList()
+                end)
+                r.frame:Show()
+            end
+            emptyText:SetShown(#keys == 0)
+            area.content:SetHeight(math.max(#keys * ROW_H, 1))
+            area:Update(#keys * ROW_H)
+        end
+        config.RefreshPlayerList = RefreshPlayerList
+
+        local function AddPlayer()
+            local typed = strtrim(nameInput:GetText() or "")
+            local key = NormalizePlayerKey(typed)
+            if not key then return end
+            db.deathPlayers = db.deathPlayers or {}
+            -- Re-adding a name updates its sound rather than duplicating the row.
+            db.deathPlayers[key] = { name = typed, sound = pendingSound }
+            nameInput:SetText(""); nameInput:ClearFocus()
+            RefreshPlayerList()
+            -- Read the roster's names now, while out of an encounter, rather than
+            -- leaving the first read to the moment someone dies.
+            RefreshRosterCache()
+        end
+        addBtn:SetScript("OnClick", AddPlayer)
+        nameInput:SetScript("OnEnterPressed", AddPlayer)
+
         -- Room reserved for the Test button pinned to the bottom edge.
         L:FitHeight(40)
 
@@ -670,6 +897,7 @@ function DUI_OpenCombatAlertsConfig()
     end
 
     if config.RefreshIconPreview then config.RefreshIconPreview() end
+    if config.RefreshPlayerList then config.RefreshPlayerList() end
     config:Show()
     DUI_UpdatePullAlertIcon()
 end

@@ -33,6 +33,11 @@ function DUI_GetReadyCheckPullTimerDefaults()
         pullDuration = 15,
         minDurability = 80,
         cancelPullOnReadyLoss = true,
+        readyCheckAfterWipe = false,
+        wipeReadyCheckDelay = 10,
+        randomHeroicPull = false,
+        randomPullMin = 10,
+        randomPullMax = 20,
     }
 end
 
@@ -461,6 +466,15 @@ local function StartAutoPull()
         return
     end
     local duration = db.pullDuration or 15
+    local isRandom = false
+    -- Heroic raid (difficulty 15) rolls the length from the player's range instead.
+    -- The ends are ordered here, so a min slid past the max still gives a sane range.
+    if db.randomHeroicPull and select(3, GetInstanceInfo()) == 15 then
+        local lo = math.floor((tonumber(db.randomPullMin) or 10) + 0.5)
+        local hi = math.floor((tonumber(db.randomPullMax) or 20) + 0.5)
+        if lo > hi then lo, hi = hi, lo end
+        duration, isRandom = math.random(lo, hi), true
+    end
 
     -- Use standard countdown API (supported by most boss mods and the game client)
     if C_PartyInfo and C_PartyInfo.DoCountdown then
@@ -470,7 +484,7 @@ local function StartAutoPull()
         editBox:SetText("/pull " .. duration)
         ChatEdit_SendText(editBox)
     end
-    print("|cFF00FF00[DUI]|r Everyone is ready! Starting " .. duration .. "s pull timer.")
+    print("|cFF00FF00[DUI]|r Everyone is ready! Starting " .. duration .. "s " .. (isRandom and "random " or "") .. "pull timer.")
 end
 
 -- ---- Cancel the pull when a ready player goes down ---------------------------
@@ -590,10 +604,13 @@ local function SetReadyCheckEventsRegistered(on)
     end
 end
 
+local SyncWipeWatch -- defined below with the after-wipe ready check
+
 -- Apply hook for the UI-tab master enable checkbox.
 function DUI_ReadyCheckPullTimerApplyEnabled(enabled)
     if db then db.enabled = enabled and true or false end
     SetReadyCheckEventsRegistered(enabled)
+    SyncWipeWatch()
 end
 
 ReadyFrame:SetScript("OnEvent", function(self, event, ...)
@@ -677,12 +694,100 @@ ReadyFrame:SetScript("OnEvent", function(self, event, ...)
     end
 end)
 
+-- Ready check after a wipe (`readyCheckAfterWipe`, off by default). Arms when a boss
+-- pull ends in a wipe that the player died on, then starts a ready check the first
+-- moment the player is no longer a corpse: on release (PLAYER_ALIVE as a ghost), on
+-- taking a res (PLAYER_ALIVE / PLAYER_UNGHOST), or straight away at the wipe if they
+-- had already released or been battle-ressed. Combat and an encounter in progress both
+-- make the server refuse the check, so those just wait for PLAYER_REGEN_ENABLED.
+-- DoReadyCheck is not hardware-protected; BreakTimer's readyCheckOnEnd calls it from
+-- OnUpdate the same way.
+local WipeFrame = CreateFrame("Frame")
+local wipeEventsOn = false
+local diedThisPull = false
+local wipeArmed = false
+-- Bumped to cancel a delayed check still waiting on its timer (a new pull, or the
+-- option turned off); the timer callback only fires if its token is still current.
+local wipeToken = 0
+
+local function FireWipeReadyCheck()
+    -- Re-checked after the delay: a pull can start in those seconds.
+    if InCombatLockdown() or IsEncounterInProgress() then
+        wipeArmed = true -- try again once combat drops
+        return
+    end
+    if not IsInGroup() then return end
+    if not UnitIsGroupLeader("player") and not UnitIsGroupAssistant("player") then
+        print("|cFF00FF00[DUI]|r Ready check after wipe skipped - you need lead or assist.")
+        return
+    end
+    if C_PartyInfo and C_PartyInfo.DoReadyCheck then
+        C_PartyInfo.DoReadyCheck()
+    elseif DoReadyCheck then
+        DoReadyCheck()
+    end
+end
+
+local function TryWipeReadyCheck()
+    if not wipeArmed then return end
+    if UnitIsDead("player") then return end -- still a corpse; wait for release or res
+    if InCombatLockdown() or IsEncounterInProgress() then return end
+    wipeArmed = false
+    local delay = (db and tonumber(db.wipeReadyCheckDelay)) or 0
+    if delay <= 0 then FireWipeReadyCheck() return end
+    wipeToken = wipeToken + 1
+    local token = wipeToken
+    C_Timer.After(delay, function()
+        if token == wipeToken then FireWipeReadyCheck() end
+    end)
+end
+
+WipeFrame:SetScript("OnEvent", function(self, event, ...)
+    if event == "ENCOUNTER_START" then
+        diedThisPull, wipeArmed = false, false
+        wipeToken = wipeToken + 1
+    elseif event == "PLAYER_DEAD" then
+        if IsEncounterInProgress() then diedThisPull = true end
+    elseif event == "ENCOUNTER_END" then
+        local success = select(5, ...)
+        local died = diedThisPull or UnitIsDeadOrGhost("player")
+        diedThisPull = false
+        -- A kill reports 1. An unreadable value is treated as a wipe: the player died
+        -- either way, and an extra check after a kill is the cheaper mistake.
+        if died and (IsSecret(success) or success ~= 1) then
+            wipeArmed = true
+            TryWipeReadyCheck()
+        end
+    else -- PLAYER_ALIVE, PLAYER_UNGHOST, PLAYER_REGEN_ENABLED
+        TryWipeReadyCheck()
+    end
+end)
+
+function SyncWipeWatch()
+    local on = (db and db.enabled and db.readyCheckAfterWipe) and true or false
+    if on == wipeEventsOn then return end
+    wipeEventsOn = on
+    diedThisPull, wipeArmed = false, false
+    wipeToken = wipeToken + 1
+    if on then
+        WipeFrame:RegisterEvent("ENCOUNTER_START")
+        WipeFrame:RegisterEvent("ENCOUNTER_END")
+        WipeFrame:RegisterEvent("PLAYER_DEAD")
+        WipeFrame:RegisterEvent("PLAYER_ALIVE")
+        WipeFrame:RegisterEvent("PLAYER_UNGHOST")
+        WipeFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+    else
+        WipeFrame:UnregisterAllEvents()
+    end
+end
+
 function DUI_InitReadyCheckPullTimer()
     db = DUI_InitModuleDB("ReadyCheckPullTimer", DUI_GetReadyCheckPullTimerDefaults)
 
     -- CHAT_MSG_SYSTEM used to be registered here with no branch to handle it, so
     -- every system message in the game woke this handler for nothing.
     SetReadyCheckEventsRegistered(db.enabled)
+    SyncWipeWatch()
 
     -- Built now rather than on the first ready check: the window owns a secure button
     -- for the repair bot, and creating it (or setting its attributes) is a protected
@@ -769,9 +874,27 @@ function DUI_OpenReadyCheckPullTimerConfig()
             { body = "Cancels the pull timer (/pull 0) when someone who answered Ready dies or goes offline before it ends.",
               note = "Covers any pull started during or within a minute of a ready check, auto or by hand. Needs lead or assist. Cancels at most once per ready check, so a pull you resend with that player still down goes ahead." })
 
+        L:Checkbox("Ready Check After a Wipe", db, "readyCheckAfterWipe", SyncWipeWatch,
+            { body = "Starts a ready check when you release or get ressed after dying on a boss wipe.",
+              note = "Needs lead or assist. Waits until you are out of combat, and fires once per wipe." })
+
+        L:Slider("DUI_RCPT_WipeDelay", "Wipe Ready Check Delay", 0, 30, 1, db, "wipeReadyCheckDelay", nil,
+            { fmt = "%ds", value = db.wipeReadyCheckDelay,
+              tooltip = "Seconds to wait after you release or get ressed before the after-wipe ready check starts. 0 starts it straight away." })
+
         -- The Soulstone whisper moved to the Ready Check Window module on 2026-10-01.
         L:Slider("DUI_RCPT_Duration", "Pull Duration", 5, 30, 1, db, "pullDuration", nil,
             { fmt = "%ds", value = db.pullDuration, tooltip = "Length of the pull timer started by Auto Pull." })
+
+        L:Checkbox("Random Pull Timer in Heroic Raids", db, "randomHeroicPull", nil,
+            { body = "In a Heroic raid, Auto Pull picks a random pull timer length between the two sliders below instead of Pull Duration.",
+              note = "Other difficulties keep using Pull Duration. If Min is set above Max, the two are swapped." })
+
+        L:Slider("DUI_RCPT_RandMin", "Random Pull Min", 5, 30, 1, db, "randomPullMin", nil,
+            { fmt = "%ds", value = db.randomPullMin, tooltip = "Shortest random pull timer in Heroic raids." })
+
+        L:Slider("DUI_RCPT_RandMax", "Random Pull Max", 5, 30, 1, db, "randomPullMax", nil,
+            { fmt = "%ds", value = db.randomPullMax, tooltip = "Longest random pull timer in Heroic raids." })
 
         L:Slider("DUI_RCPT_DurThreshold", "Durability Warning", 10, 100, 5, db, "minDurability", nil,
             { fmt = "%d%%", value = db.minDurability,

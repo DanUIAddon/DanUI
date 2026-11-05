@@ -281,10 +281,15 @@ local function TryHookLowHealthFrame()
     LowHealthFrame:HookScript("OnHide", OnBlizzardWarningToggled)
 end
 
+-- The retry stops listening once the hook is in; otherwise every loading screen
+-- for the rest of the session woke it to find there was nothing left to do.
 local hookFrame = CreateFrame("Frame")
-hookFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
-hookFrame:SetScript("OnEvent", TryHookLowHealthFrame)
+hookFrame:SetScript("OnEvent", function(self)
+    TryHookLowHealthFrame()
+    if hooked then self:UnregisterAllEvents() end
+end)
 TryHookLowHealthFrame()
+if not hooked then hookFrame:RegisterEvent("PLAYER_ENTERING_WORLD") end
 
 -- Configuration UI
 local config = DUI_CreateConfigFrame("DUI_LowHealthReminderConfig", "Low Health Reminder", 320, 400, "DUI_LowHealthReminderBtn", {

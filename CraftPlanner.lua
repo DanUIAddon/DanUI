@@ -58,6 +58,9 @@ function DUI_GetCraftPlannerDefaults()
         autoDeposit = true,     -- crafted results, on any bank opening
         depositReagents = true, -- bought reagents the run still needs, same trigger
         loginReminder = true,
+        autoOpen = true,        -- show the next-step window at login when there's work
+        miniAlpha = 1,          -- opacity of the whole next-step window, text included
+        -- miniPos = { point, x, y, relativePoint } of the next-step window, once dragged
         listName = "DanUI Crafting",
         runActive = false,
         -- { char = "Name-Realm", recipeID, name, skillLineID (base, for
@@ -98,6 +101,8 @@ end
 local RefreshPanel = function() end
 -- Shows or hides the secure Open Warbank button to match the panel (see below).
 local SyncWarbankButton = function() end
+-- Repaints the small next-step window (see "Next-step window" below).
+local RefreshMini = function() end
 
 -- Realm-qualified, so two alts of the same name on different realms stay apart.
 -- UnitFullName can leave the realm nil this early in a session, hence the
@@ -116,9 +121,18 @@ local function ShortName(key)
     return (key and key:match("^[^%-]+")) or "?"
 end
 
+-- Items whose name was asked for before the client had it. The next-step window
+-- only repaints for GET_ITEM_INFO_RECEIVED on one of these (see miniListener): the
+-- event fires for every item any addon looks up, hundreds at a time around login,
+-- and a name is the only thing that window shows that waits on item data.
+local namesPending = {}
+
 local function ItemName(itemID)
     local name = C_Item.GetItemInfo(itemID)
-    if not name and C_Item.RequestLoadItemData then pcall(C_Item.RequestLoadItemData, itemID) end
+    if not name then
+        namesPending[itemID] = true
+        if C_Item.RequestLoadItemData then pcall(C_Item.RequestLoadItemData, itemID) end
+    end
     return name or ("item " .. tostring(itemID))
 end
 
@@ -140,6 +154,13 @@ end
 
 local function WarbankCount(itemID)
     return (GetItemCount(itemID, false, false, false, true) or 0) - (GetItemCount(itemID) or 0)
+end
+
+-- Bags only. The deposit credits crafted items by what left the bags as well as by
+-- the warband delta: the warband count alone missed a cauldron that did go in, and
+-- the row stayed on "to bank" for good (reported live 2026-10-19).
+local function BagCount(itemID)
+    return GetItemCount(itemID) or 0
 end
 
 -- The reagents a recipe always consumes, one row per slot: { ids, qty, slot }.
@@ -789,6 +810,25 @@ end
 
 -- Credits a finished craft to the matching entry. Fires for crafts made from
 -- Blizzard's window too, so the plan stays right whichever button was pressed.
+-- Whether a result can be `entry`'s craft, beyond the recipe in progress saying so.
+-- A craft's result can land after the next craft has begun: a Stabilized Derivate
+-- finishing just as the cauldron was started was credited as the cauldron, which
+-- then read as done (reported live). So the item itself has to fit - never one of
+-- the entry's own reagents, and an item the output list doesn't know (a new quality
+-- tier) only when it carries the same name as a known output or the recipe.
+local function CreditMatches(entry, result)
+    if result.recipeID and result.recipeID ~= entry.recipeID then return false end
+    if IsReagentOf(entry, result.itemID) then return false end
+    if OutputsContain(entry, result.itemID) then return true end
+    local name = C_Item.GetItemNameByID(result.itemID)
+    if not name then return false end
+    if name == entry.name then return true end
+    for _, id in ipairs(Outputs(entry)) do
+        if C_Item.GetItemNameByID(id) == name then return true end
+    end
+    return false
+end
+
 local function OnCraftResult(result)
     if not (db.runActive and type(result) == "table" and result.itemID) then return end
     local hit
@@ -806,6 +846,7 @@ local function OnCraftResult(result)
         end
     end
     if not hit then return end
+    if not CreditMatches(hit, result) then return end
 
     -- An item the output list didn't know (a new quality tier, say) is learned so
     -- the deposit pass can find it - only when the recipe itself confirmed the
@@ -948,14 +989,35 @@ local function Deposit(manual)
     end
 
     local jobs, plan, used = {}, {}, {}
-    local outBefore, reagentBefore = {}, {}
+    local outBefore, bagBefore, reagentBefore = {}, {}, {}
+
+    -- A crafted item can only be deposited from the bags, so "waiting" can never be
+    -- more than the bags hold. Anything beyond that already went in (or is gone), and
+    -- left counted it would keep the row stuck on "to bank" with nothing to move.
+    local healed = false
+    for _, e in ipairs(MyEntries()) do
+        if (e.toDeposit or 0) > 0 then
+            local held = 0
+            for _, id in ipairs(Outputs(e)) do held = held + BagCount(id) end
+            if held < e.toDeposit then e.toDeposit, healed = held, true end
+        end
+    end
+    if healed then
+        CheckRunComplete()
+        SyncEvents()
+        RefreshPanel()
+        if not db.runActive then return end
+    end
 
     if manual or db.autoDeposit then
         for _, e in ipairs(MyEntries()) do
             local want = e.toDeposit or 0
             if want > 0 then
                 local outs = Outputs(e)
-                for _, id in ipairs(outs) do outBefore[id] = outBefore[id] or WarbankCount(id) end
+                for _, id in ipairs(outs) do
+                    outBefore[id] = outBefore[id] or WarbankCount(id)
+                    bagBefore[id] = bagBefore[id] or BagCount(id)
+                end
                 QueueMoves(jobs, plan, used, BAGS, outs, want, manual)
             end
         end
@@ -994,7 +1056,11 @@ local function Deposit(manual)
                 local arrived = 0
                 for _, id in ipairs(Outputs(e)) do
                     if outBefore[id] then
-                        arrived = arrived + math.max(WarbankCount(id) - outBefore[id], 0)
+                        -- Whichever shows the move: the warband delta, or what left
+                        -- the bags (every queued move's destination is the warband).
+                        local inWarbank = WarbankCount(id) - outBefore[id]
+                        local leftBags = bagBefore[id] - BagCount(id)
+                        arrived = arrived + math.max(inWarbank, leftBags, 0)
                         outBefore[id] = nil -- credit an item to one entry only
                     end
                 end
@@ -1413,6 +1479,15 @@ local function BuildPanel()
         "Opening any bank (or Open Warbank) during a run moves reagents the run still needs from your bags - and, at a banker, your own bank - into the warband bank, up to what the warband bank is short of. Pinned reagents move only their pinned tier.")
     L:Checkbox("Remind me on login", db, "loginReminder", nil,
         "Logging in on a character with something left to craft or bank prints a line in chat. /dan opens onto this panel either way.")
+    L:Checkbox("Show the next-step window on login", db, "autoOpen", nil,
+        "Logging in on a character with something left to craft or bank opens a small window with the next craft, any missing reagents, and Craft and Open Warbank buttons. Not on /reload, and not in combat. /dancraft opens it any time.")
+    -- Fades the whole window, text and buttons too, unlike the Theme panel's
+    -- Background opacity, which only thins the backdrop of every DUI window.
+    L:Slider("DUI_CraftPlannerMiniAlpha", "Next-step window opacity", 0.2, 1, 0.05, db, "miniAlpha",
+        function(value) if DUI_CraftPlannerMini then DUI_CraftPlannerMini:SetAlpha(value) end end,
+        { value = db.miniAlpha or 1,
+          fmt = function(v) return string.format("%d%%", math.floor(v * 100 + 0.5)) end,
+          tooltip = "How see-through the next-step window is, text and buttons included. The Theme panel's Background opacity thins only the backdrop." })
 
     L:FitHeight()
 end
@@ -1559,6 +1634,7 @@ local function PaintReagentList()
 end
 
 RefreshPanel = function()
+    RefreshMini()
     if not (config.init and db and config:IsShown()) then return end
     hereText:SetText(HereStatus())
     runText:SetText(RunStatus())
@@ -1578,6 +1654,7 @@ function DUI_OpenCraftPlannerConfig()
 end
 
 function DUI_CraftPlannerApplyEnabled()
+    if not db.enabled and DUI_CraftPlannerMini and not InCombatLockdown() then DUI_CraftPlannerMini:Hide() end
     SyncEvents()
     SyncWarbankButton()
     RefreshPanel()
@@ -1651,6 +1728,7 @@ SyncWarbankButton = function()
     end
 end
 
+local HideMiniForCombat, ShowMiniAfterCombat -- next-step window, defined below
 local combatFrame = CreateFrame("Frame")
 combatFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
 combatFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
@@ -1659,8 +1737,10 @@ combatFrame:SetScript("OnEvent", function(_, event)
         -- Deliberately unguarded: this is the one place the hide is still allowed.
         warbankBtn:Hide()
         warbankBtn:ClearAllPoints()
+        if HideMiniForCombat then HideMiniForCombat() end
     else
         SyncWarbankButton()
+        if ShowMiniAfterCombat then ShowMiniAfterCombat() end
     end
 end)
 
@@ -1668,11 +1748,13 @@ end)
 -- They are chatty, so they are only listened to while it is up, and coalesced
 -- to one repaint per frame.
 local repaintQueued = false
+-- Hoisted, so a burst doesn't build a fresh closure for its repaint.
+local function FlushPanelRepaint() repaintQueued = false; RefreshPanel() end
 local panelListener = CreateFrame("Frame")
 panelListener:SetScript("OnEvent", function()
     if repaintQueued then return end
     repaintQueued = true
-    C_Timer.After(0, function() repaintQueued = false; RefreshPanel() end)
+    C_Timer.After(0, FlushPanelRepaint)
 end)
 
 config:HookScript("OnShow", function()
@@ -1698,6 +1780,210 @@ config:HookScript("OnHide", function()
 end)
 
 DUI_CraftPlannerConfig = config
+
+-------------------------------------------------------------------------------
+-- Next-step window
+-------------------------------------------------------------------------------
+
+-- A small window with only what this character has to do next: the next craft,
+-- the reagents it is still short of, and Craft and Open Warbank. Shown at login on
+-- a character with work in the run (see the login handler), and by /dancraft.
+--
+-- Its Open Warbank is a real secure button, which makes the whole window protected:
+-- it can't be shown, hidden, moved or resized from addon code in combat. So it is
+-- hidden at PLAYER_REGEN_DISABLED (the last moment that is allowed), brought back
+-- when combat ends if it was up, and never touched in between - repaints in combat
+-- are skipped and redone on the next show.
+-- The buttons sit in a fixed row under the title and the window is always anchored
+-- by its top-left, so a step change only grows or shrinks it at the bottom: when
+-- they sat along the bottom edge, every resize moved Open Warbank out from under
+-- the cursor (reported live).
+local MINI_W, MINI_PAD = 290, 12
+local MINI_BTN_Y = -32                       -- the button row's top
+local MINI_TEXT_Y = MINI_BTN_Y - 25 - 10     -- the step text's top, under the buttons
+
+-- Re-anchors the window by its top-left corner where it now stands, and saves that.
+-- StopMovingOrSizing leaves whatever anchor is nearest, and a bottom or centre
+-- anchor would move the top (and the buttons) on every resize.
+local function MiniPinTopLeft(self)
+    local left, top = self:GetLeft(), self:GetTop()
+    if not (left and top) then return end
+    local x, y = left, top - UIParent:GetHeight() * UIParent:GetEffectiveScale() / self:GetEffectiveScale()
+    self:ClearAllPoints()
+    self:SetPoint("TOPLEFT", UIParent, "TOPLEFT", x, y)
+    db.miniPos = { "TOPLEFT", x, y, "TOPLEFT" }
+end
+
+local mini = CreateFrame("Frame", "DUI_CraftPlannerMini", UIParent, "BackdropTemplate")
+mini:SetSize(MINI_W, 120)
+mini:SetFrameStrata("DIALOG")
+mini:SetClampedToScreen(true)
+mini:SetMovable(true); mini:EnableMouse(true); mini:RegisterForDrag("LeftButton")
+mini:SetScript("OnDragStart", function(self) if not InCombatLockdown() then self:StartMoving() end end)
+mini:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    MiniPinTopLeft(self)
+end)
+mini:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 2 })
+mini:SetBackdropColor(unpack(DUI_Theme.MainBG)); mini:SetBackdropBorderColor(unpack(DUI_Theme.Accent))
+DUI_RegisterAccent(mini, "border")
+DUI_RegisterMainBG(mini, "bg")
+DUI_AddDropShadow(mini)
+mini:Hide()
+
+local miniClose = CreateFrame("Button", nil, mini, "BackdropTemplate")
+miniClose:SetSize(18, 18); miniClose:SetPoint("TOPRIGHT", -5, -5)
+StyleAsCloseButton(miniClose)
+miniClose:SetScript("OnClick", function() if not InCombatLockdown() then mini:Hide() end end)
+
+local miniTitle = mini:CreateFontString(nil, "OVERLAY", "DUI_FontNormal")
+miniTitle:SetPoint("TOPLEFT", MINI_PAD, -9)
+miniTitle:SetText("Craft Planner")
+
+local miniStep = mini:CreateFontString(nil, "OVERLAY", "DUI_FontSmall")
+miniStep:SetPoint("TOPLEFT", MINI_PAD, MINI_TEXT_Y)
+miniStep:SetWidth(MINI_W - MINI_PAD * 2)
+miniStep:SetJustifyH("LEFT"); miniStep:SetWordWrap(true)
+
+local miniReagents = mini:CreateFontString(nil, "OVERLAY", "DUI_FontSmall")
+miniReagents:SetPoint("TOPLEFT", miniStep, "BOTTOMLEFT", 0, -6)
+miniReagents:SetWidth(MINI_W - MINI_PAD * 2)
+miniReagents:SetJustifyH("LEFT"); miniReagents:SetWordWrap(true)
+
+local miniCraft = MakeButton(mini, "Craft", 120, MINI_PAD, -100, function() Craft() end, "Craft",
+    { body = "First click opens the profession on the next recipe assigned to this character; the second crafts it." })
+miniCraft:ClearAllPoints()
+miniCraft:SetPoint("TOPLEFT", MINI_PAD, MINI_BTN_Y)
+
+local miniWarbank = CreateFrame("Button", nil, mini, "SecureActionButtonTemplate, BackdropTemplate")
+miniWarbank:SetSize(130, 25)
+miniWarbank:SetPoint("TOPRIGHT", -MINI_PAD, MINI_BTN_Y)
+miniWarbank:SetAttribute("type", "spell")
+miniWarbank:SetAttribute("spell", WARBANK_SPELL_ID)
+miniWarbank:RegisterForClicks("AnyUp", "AnyDown")
+miniWarbank:SetText("Open Warbank")
+StyleAsTealTab(miniWarbank)
+DUI_AddTooltip(miniWarbank, "Open Warbank",
+    { body = "Casts Warband Bank Distance Inhibitor, which opens the warband bank wherever you are. With the deposit options ticked, crafted items and bought reagents then move in by themselves." })
+
+-- Once this character's part is done (crafted and banked) Craft and Open Warbank
+-- give way to Logout. Logout() is protected, so this is a secure macro button
+-- running /logout, which is allowed from a click.
+local miniLogout = CreateFrame("Button", nil, mini, "SecureActionButtonTemplate, BackdropTemplate")
+miniLogout:SetSize(120, 25)
+miniLogout:SetPoint("TOP", 0, MINI_BTN_Y)
+miniLogout:SetAttribute("type", "macro")
+miniLogout:SetAttribute("macrotext", "/logout")
+miniLogout:RegisterForClicks("AnyUp", "AnyDown")
+miniLogout:SetText("Logout")
+StyleAsTealTab(miniLogout)
+DUI_AddTooltip(miniLogout, "Logout", { body = "This character's part of the run is done. Logs out to the character list, for the next one." })
+miniLogout:Hide()
+
+local MINI_REAGENT_LINES = 6
+
+local function MiniText()
+    -- The last deposit of a run ends it, so no run usually means it just finished.
+    if not db.runActive then return "|cff80ff80No run in progress - nothing left to do here.|r", "", true end
+    local entry = NextToCraft()
+    if entry then
+        local step = string.format("|cffffffffNext: craft %dx %s|r (%s)%s", Remaining(entry), entry.name,
+            entry.profName or "?", entry.concentrate and " with concentration" or "")
+        local missing = MissingFor(entry)
+        if #missing == 0 then return step, "|cff80ff80Reagents ready.|r" end
+        local lines = { "|cffff8080Missing:|r" }
+        for i, m in ipairs(missing) do
+            if i > MINI_REAGENT_LINES then
+                lines[#lines + 1] = string.format("|cff999999...and %d more - see /dan.|r", #missing - MINI_REAGENT_LINES)
+                break
+            end
+            lines[#lines + 1] = string.format("  %dx %s", m.count, ItemName(m.itemID))
+        end
+        return step, table.concat(lines, "\n")
+    end
+    local waiting = 0
+    for _, e in ipairs(MyEntries()) do waiting = waiting + (e.toDeposit or 0) end
+    if waiting > 0 then
+        return string.format("|cffffd100Crafts done - Open Warbank (or visit a bank) to put %d in the warband bank.|r", waiting), ""
+    end
+    return "|cff80ff80Nothing left for this character.|r", "", true
+end
+
+RefreshMini = function()
+    if not (db and mini:IsShown()) or InCombatLockdown() then return end
+    local step, reagents, done = MiniText()
+    miniCraft:SetShown(not done)
+    miniWarbank:SetShown(not done)
+    miniLogout:SetShown(done or false)
+    miniStep:SetText(step)
+    miniReagents:SetText(reagents)
+    local h = -MINI_TEXT_Y + miniStep:GetStringHeight() + (reagents ~= "" and 6 + miniReagents:GetStringHeight() or 0)
+    mini:SetHeight(math.ceil(h) + MINI_PAD)
+end
+
+-- Bag counts and item names change what it says; listened to only while it is up,
+-- and coalesced to one repaint per frame like the panel's.
+local miniQueued = false
+local function FlushMiniRepaint() miniQueued = false; RefreshMini() end
+local miniListener = CreateFrame("Frame")
+miniListener:SetScript("OnEvent", function(_, event, itemID)
+    -- Item data only matters here for a name the window is still showing as
+    -- "item 12345"; any other item's arrival would repaint it unchanged.
+    if event == "GET_ITEM_INFO_RECEIVED" then
+        if not (itemID and namesPending[itemID]) then return end
+        namesPending[itemID] = nil
+    end
+    if miniQueued then return end
+    miniQueued = true
+    C_Timer.After(0, FlushMiniRepaint)
+end)
+mini:SetScript("OnShow", function()
+    miniListener:RegisterEvent("BAG_UPDATE_DELAYED")
+    miniListener:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+    RefreshMini()
+end)
+mini:SetScript("OnHide", function() miniListener:UnregisterAllEvents() end)
+
+local function ShowMini()
+    if InCombatLockdown() or not (db and db.enabled) then return end
+    mini:ClearAllPoints()
+    local pos = db.miniPos
+    if pos then
+        mini:SetPoint(pos[1], UIParent, pos[4] or pos[1], pos[2], pos[3])
+        -- A spot saved before the window was kept top-left anchored.
+        if pos[1] ~= "TOPLEFT" then MiniPinTopLeft(mini) end
+    else
+        mini:SetPoint("TOP", UIParent, "TOP", 0, -180)
+    end
+    mini:SetAlpha(db.miniAlpha or 1)
+    mini:Show() -- OnShow repaints
+end
+
+local miniCombatHidden = false
+HideMiniForCombat = function()
+    -- Deliberately unguarded, like the warbank button: still allowed at this event.
+    if mini:IsShown() then
+        miniCombatHidden = true
+        mini:Hide()
+    end
+end
+ShowMiniAfterCombat = function()
+    if not miniCombatHidden then return end
+    miniCombatHidden = false
+    ShowMini()
+end
+
+SLASH_DUICRAFT1 = "/dancraft"
+SlashCmdList["DUICRAFT"] = function()
+    if not db then return end
+    if InCombatLockdown() then
+        Announce("the next-step window can't open in combat.")
+    elseif mini:IsShown() then
+        mini:Hide()
+    else
+        ShowMini()
+    end
+end
 
 -------------------------------------------------------------------------------
 -- Events
@@ -1800,9 +2086,33 @@ end)
 -- PLAYER_LOGIN rather than ADDON_LOADED: the realm half of the character key is
 -- not reliable before it, so the key and the event sync are redone here.
 local loginFrame = CreateFrame("Frame")
+
+-- The next-step window waits for PLAYER_ENTERING_WORLD on a real login (a /reload
+-- would pop it up mid-session) plus a moment, so it lands after the loading screen.
+-- Not in combat (it is protected, see above): a login into combat waits for that
+-- combat to end, once.
+local function AutoOpen()
+    if not (db.autoOpen and HasWork()) then return end
+    if InCombatLockdown() then
+        loginFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+        return
+    end
+    ShowMini()
+end
+
 loginFrame:RegisterEvent("PLAYER_LOGIN")
-loginFrame:SetScript("OnEvent", function()
+loginFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+loginFrame:SetScript("OnEvent", function(self, event, isInitialLogin)
     if not db then return end
+    if event == "PLAYER_ENTERING_WORLD" then
+        self:UnregisterEvent(event)
+        if isInitialLogin then C_Timer.After(2, AutoOpen) end
+        return
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        self:UnregisterEvent(event)
+        AutoOpen()
+        return
+    end
     myKey = nil
     InvalidateMine()
     for _, e in ipairs(MyEntries()) do

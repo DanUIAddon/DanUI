@@ -517,24 +517,80 @@ for _, u in ipairs(DUI_GROUP_UNITS) do DUI_GROUP_UNIT_SET[u] = true end
 -- frame per unit). Plain RegisterEvent would work too, but UNIT_HEALTH/UNIT_AURA
 -- then fire for every nameplate and passer-by.
 -- Returns an object with :SetRegistered(on); handler gets (self, event, unit, ...).
+--
+-- Only the tokens the current group shape uses are listened to. In a raid the
+-- partyN tokens still exist -- they alias the rest of your own subgroup -- so
+-- listening to all 45 delivered every UNIT_HEALTH / UNIT_AURA for those four
+-- people twice, once as partyN and once as raidN, and every handler here either
+-- discards the partyN copy (DUI_GroupIndexOf) or dedupes it after the fact. Out
+-- of a raid the raidN tokens never fire, so they cost nothing to drop either.
+-- "player" stays in both sets, as it was in the single list before.
+local PARTY_WATCH_UNITS, RAID_WATCH_UNITS = { "player" }, { "player" }
+for i = 1, 4 do PARTY_WATCH_UNITS[#PARTY_WATCH_UNITS + 1] = PARTY_TOKENS[i] end
+for i = 1, 40 do RAID_WATCH_UNITS[#RAID_WATCH_UNITS + 1] = RAID_TOKENS[i] end
+
+-- Watchers currently switched on, re-pointed at the right token set when the group
+-- turns into a raid or back. One shared listener, registered only while any watcher
+-- is on, so the common case (nothing watching) carries no roster event at all.
+local liveWatchers = {}
+local watcherRosterFrame = CreateFrame("Frame")
+watcherRosterFrame:SetScript("OnEvent", function()
+    for w in pairs(liveWatchers) do w:SyncGroupShape() end
+end)
+
 function DUI_CreateGroupUnitWatcher(events, handler)
-    local frames = {}
-    for i = 1, #DUI_GROUP_UNITS, 2 do
-        local f = CreateFrame("Frame")
-        f:SetScript("OnEvent", handler)
-        frames[#frames + 1] = { frame = f, u1 = DUI_GROUP_UNITS[i], u2 = DUI_GROUP_UNITS[i + 1] }
+    -- Frames are built on first use rather than at load: several watchers are only
+    -- ever switched on for a ready check or a pull, and some sessions never do either.
+    local sets = {}
+    local function GetSet(units)
+        local list = sets[units]
+        if not list then
+            list = {}
+            for i = 1, #units, 2 do
+                local f = CreateFrame("Frame")
+                f:SetScript("OnEvent", handler)
+                list[#list + 1] = { frame = f, u1 = units[i], u2 = units[i + 1] }
+            end
+            sets[units] = list
+        end
+        return list
     end
-    local watcher, on = {}, false
-    function watcher:SetRegistered(want)
-        want = want and true or false
-        if want == on then return end
-        on = want
-        for _, e in ipairs(frames) do
+    local function SetListRegistered(list, want)
+        for _, e in ipairs(list) do
             if want then
                 for _, ev in ipairs(events) do e.frame:RegisterUnitEvent(ev, e.u1, e.u2) end
             else
                 e.frame:UnregisterAllEvents()
             end
+        end
+    end
+    local function WantedUnits() return IsInRaid() and RAID_WATCH_UNITS or PARTY_WATCH_UNITS end
+
+    local watcher, liveUnits = {}, nil -- liveUnits: the token set registered now, nil when off
+    function watcher:SyncGroupShape()
+        if not liveUnits then return end
+        local units = WantedUnits()
+        if units == liveUnits then return end
+        SetListRegistered(GetSet(liveUnits), false)
+        SetListRegistered(GetSet(units), true)
+        liveUnits = units
+    end
+    function watcher:SetRegistered(want)
+        want = want and true or false
+        if want == (liveUnits ~= nil) then return end
+        if want then
+            liveUnits = WantedUnits()
+            SetListRegistered(GetSet(liveUnits), true)
+            liveWatchers[watcher] = true
+        else
+            SetListRegistered(GetSet(liveUnits), false)
+            liveUnits = nil
+            liveWatchers[watcher] = nil
+        end
+        if next(liveWatchers) then
+            watcherRosterFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
+        else
+            watcherRosterFrame:UnregisterEvent("GROUP_ROSTER_UPDATE")
         end
     end
     return watcher
@@ -1844,6 +1900,9 @@ local function FlushRosterUpdate()
 end
 EventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
     if event == "ADDON_LOADED" and arg1 == "DanUI" then
+        -- Nothing below listens for any other addon, and ADDON_LOADED keeps firing
+        -- for every load-on-demand Blizzard UI opened later in the session.
+        self:UnregisterEvent("ADDON_LOADED")
         -- One-time migration: adopt settings saved under the old addon name
         -- (DansRandomNeeds/DansRandomNeedsDB) before they get discarded.
         if DanUIDB == nil and DansRandomNeedsDB ~= nil then
@@ -2029,7 +2088,7 @@ EventFrame:SetScript("OnEvent", function(self, event, arg1, arg2)
             rcAuraWatcher:SetRegistered(true)
             local timeLeft = 35; if DUI_ReadyCheckFrame then DUI_ReadyCheckFrame.Title:SetText("Ready Check: 35s"); DUI_ReadyCheckFrame:Show(); UpdateRCWindow() end
             if RC_Ticker then RC_Ticker:Cancel() end
-            RC_Ticker = C_Timer.NewTicker(1, function() timeLeft = timeLeft - 1; if DUI_ReadyCheckFrame then DUI_ReadyCheckFrame.Title:SetText("Ready Check: " .. timeLeft .. "s") end; if timeLeft <= 0 then RC_Ticker:Cancel() end end)
+            RC_Ticker = C_Timer.NewTicker(1, function() timeLeft = timeLeft - 1; if DUI_ReadyCheckFrame then DUI_ReadyCheckFrame.Title:SetFormattedText("Ready Check: %ds", timeLeft) end; if timeLeft <= 0 then RC_Ticker:Cancel() end end)
         end
     elseif event == "READY_CHECK_CONFIRM" then if DUI_ReadyCheckFrame and DUI_ReadyCheckFrame:IsShown() then DUI_QueueReadyCheckRefresh() end
     elseif event == "READY_CHECK_FINISHED" then
@@ -2970,9 +3029,11 @@ end
 -- Re-open whatever was docked last time, so the window comes back where you left
 -- it rather than on an empty pane.
 MainFrame:HookScript("OnShow", function()
-    -- Built one panel per tick from here rather than on the first keystroke, so
-    -- the first search is already looking at a full index.
-    if MainFrame.WarmSearchIndex then MainFrame.WarmSearchIndex() end
+    -- The search index is warmed from the search box's first keystroke, not from
+    -- here. Warming on open built all 22 panels (frames that can never be freed)
+    -- for every session that opened /dan at all, searched or not; the first search
+    -- of a session shows "Indexing settings..." for a moment instead. Chosen by
+    -- the user on 2026-10-20.
 
     local last = DanUIDB and DanUIDB.Launcher and DanUIDB.Launcher.lastModule
     if last and not dockedFrame then
