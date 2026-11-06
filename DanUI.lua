@@ -2179,6 +2179,7 @@ local DUI_MODULE_GROUPS = {
         { text = "LFG Filter",         frame = "DUI_LFGFilterConfig",         open = "DUI_OpenLFGFilterConfig",           dbKey = "LFGFilter",           apply = "DUI_LFGFilterApplyEnabled" },
         { text = "Bag Item Level",     frame = "DUI_BagItemLevelConfig",      open = "DUI_OpenBagItemLevelConfig",        dbKey = "BagItemLevel",        apply = "DUI_BagItemLevelApplyEnabled" },
         { text = "Battle Res Tracker", frame = "DUI_BattleResTrackerConfig",  open = "DUI_OpenBattleResTrackerConfig",    dbKey = "RaidTools", field = "battleResEnabled", apply = "DUI_BattleResApplyEnabled" },
+        { text = "Stream Deck",        frame = "DUI_StreamDeckConfig",        open = "DUI_OpenStreamDeckConfig",          dbKey = "StreamDeck",          apply = "DUI_StreamDeckApplyEnabled" },
     }},
     { name = "QUALITY OF LIFE", modules = {
         { text = "Guild Bank Sorter",  frame = "DUI_GuildBankSortConfig",     open = "DUI_OpenGuildBankSortConfig",       dbKey = "GuildBankSort",       apply = "DUI_GuildBankSortApplyEnabled" },

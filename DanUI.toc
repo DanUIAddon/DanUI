@@ -60,6 +60,7 @@ WarbankGold.lua
 GuildBankRestock.lua
 CraftPlanner.lua
 BagItemLevel.lua
+StreamDeck.lua
 
 # AutoPayout (ported from Oppzippy's Auto Payout, reskinned for DUI)
 AutoPayoutLogic.lua
