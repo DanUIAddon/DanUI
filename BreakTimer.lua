@@ -224,14 +224,48 @@ end
 -- Init
 --------------------------------------------------------------------------------
 
+-- Whether a real break is running, tracked apart from the display: it holds even with
+-- the Break Timer display switched off, and the config's Test preview never sets it.
+-- ReadyCheckPullTimer asks this so the after-wipe ready check stays quiet during a
+-- break. A boss pull means the break is over whatever its clock says, so
+-- ENCOUNTER_START clears it.
+local breakActiveUntil = 0
+
+local function MarkBreak(seconds)
+    local duration = tonumber(seconds)
+    breakActiveUntil = (duration and duration > 0) and (GetTime() + duration) or 0
+end
+
+function DUI_IsBreakTimerActive()
+    return breakActiveUntil > GetTime()
+end
+
+local breakStateFrame = CreateFrame("Frame")
+breakStateFrame:RegisterEvent("ENCOUNTER_START")
+breakStateFrame:SetScript("OnEvent", function() breakActiveUntil = 0 end)
+
 -- BigWigs_StartBreak(module, seconds, nick, isDBM, reboot, barText, icon)
 -- `reboot` is true when BigWigs restores a break that was running across a reload.
 local function BW_BreakStarted(event, module, seconds)
+    MarkBreak(seconds)
     StartBreak(seconds, "break")
 end
 
 local function BW_BreakStopped()
+    breakActiveUntil = 0
     StopBreak("break")
+end
+
+-- DBM without BigWigs: DBM reports its break bar through its own timer callbacks,
+-- with the id "break" (type "breaktimer"). Only the active state is taken from it;
+-- the on-screen display stays BigWigs-driven as before. Both callback names are
+-- registered because DBM has used each across versions.
+local function DBM_TimerStarted(event, id, msg, timer, icon, timerType)
+    if id == "break" or timerType == "breaktimer" then MarkBreak(timer) end
+end
+
+local function DBM_TimerStopped(event, id)
+    if id == "break" then breakActiveUntil = 0 end
 end
 
 -- BigWigs_StartPull(module, seconds, nick, barText, icon)
@@ -274,6 +308,11 @@ function DUI_InitBreakTimer()
         BigWigsLoader.RegisterMessage(obj, "BigWigs_StopBreak", BW_BreakStopped)
         BigWigsLoader.RegisterMessage(obj, "BigWigs_StartPull", BW_PullStarted)
         BigWigsLoader.RegisterMessage(obj, "BigWigs_StopPull", BW_PullStopped)
+    end
+    if DBM and DBM.RegisterCallback then
+        pcall(DBM.RegisterCallback, DBM, "DBM_TimerStart", DBM_TimerStarted)
+        pcall(DBM.RegisterCallback, DBM, "DBM_TimerBegin", DBM_TimerStarted)
+        pcall(DBM.RegisterCallback, DBM, "DBM_TimerStop", DBM_TimerStopped)
     end
 
     DUI_UpdateBreakTimerAppearance()

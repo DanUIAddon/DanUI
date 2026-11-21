@@ -702,6 +702,12 @@ end)
 -- make the server refuse the check, so those just wait for PLAYER_REGEN_ENABLED.
 -- DoReadyCheck is not hardware-protected; BreakTimer's readyCheckOnEnd calls it from
 -- OnUpdate the same way.
+--
+-- A break or pull timer on the clock means the lead has already decided what happens
+-- next, so the check is dropped (not postponed) when one is running, both when the
+-- wipe is armed and again when the delay runs out. Pulls come from the client
+-- countdown tracked above (DanUI, /pull, BigWigs and DBM all go through it); breaks
+-- from BreakTimer.lua, which follows BigWigs' and DBM's break bars.
 local WipeFrame = CreateFrame("Frame")
 local wipeEventsOn = false
 local diedThisPull = false
@@ -710,6 +716,20 @@ local wipeArmed = false
 -- option turned off); the timer callback only fires if its token is still current.
 local wipeToken = 0
 
+-- Returns "break", "pull" or nil.
+local function WipeCheckBlockedByTimer()
+    if DUI_IsBreakTimerActive and DUI_IsBreakTimerActive() then return "break" end
+    if PullTimerActive() then return "pull" end
+end
+
+local function SkipWipeCheckForTimer(kind)
+    wipeArmed = false
+    wipeToken = wipeToken + 1
+    if IsInGroup() and (UnitIsGroupLeader("player") or UnitIsGroupAssistant("player")) then
+        print("|cFF00FF00[DUI]|r Ready check after wipe skipped - a " .. kind .. " timer is running.")
+    end
+end
+
 local function FireWipeReadyCheck()
     -- Re-checked after the delay: a pull can start in those seconds.
     if InCombatLockdown() or IsEncounterInProgress() then
@@ -717,6 +737,8 @@ local function FireWipeReadyCheck()
         return
     end
     if not IsInGroup() then return end
+    local timer = WipeCheckBlockedByTimer()
+    if timer then SkipWipeCheckForTimer(timer) return end
     if not UnitIsGroupLeader("player") and not UnitIsGroupAssistant("player") then
         print("|cFF00FF00[DUI]|r Ready check after wipe skipped - you need lead or assist.")
         return
@@ -732,6 +754,8 @@ local function TryWipeReadyCheck()
     if not wipeArmed then return end
     if UnitIsDead("player") then return end -- still a corpse; wait for release or res
     if InCombatLockdown() or IsEncounterInProgress() then return end
+    local timer = WipeCheckBlockedByTimer()
+    if timer then SkipWipeCheckForTimer(timer) return end
     wipeArmed = false
     local delay = (db and tonumber(db.wipeReadyCheckDelay)) or 0
     if delay <= 0 then FireWipeReadyCheck() return end
@@ -746,6 +770,10 @@ WipeFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "ENCOUNTER_START" then
         diedThisPull, wipeArmed = false, false
         wipeToken = wipeToken + 1
+        -- The pull countdown is spent once the boss is engaged. Its length reads as a
+        -- secret inside instances and falls back to MAX_PULL, so without this a quick
+        -- wipe could still look like it had a pull timer running.
+        pullEndTime = 0
     elseif event == "PLAYER_DEAD" then
         if IsEncounterInProgress() then diedThisPull = true end
     elseif event == "ENCOUNTER_END" then
@@ -876,7 +904,7 @@ function DUI_OpenReadyCheckPullTimerConfig()
 
         L:Checkbox("Ready Check After a Wipe", db, "readyCheckAfterWipe", SyncWipeWatch,
             { body = "Starts a ready check when you release or get ressed after dying on a boss wipe.",
-              note = "Needs lead or assist. Waits until you are out of combat, and fires once per wipe." })
+              note = "Needs lead or assist. Waits until you are out of combat, and fires once per wipe. Skipped while a break or pull timer is running." })
 
         L:Slider("DUI_RCPT_WipeDelay", "Wipe Ready Check Delay", 0, 30, 1, db, "wipeReadyCheckDelay", nil,
             { fmt = "%ds", value = db.wipeReadyCheckDelay,
